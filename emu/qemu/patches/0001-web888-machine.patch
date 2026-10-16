@@ -1,0 +1,79 @@
+diff -ru a/hw/arm/Kconfig b/hw/arm/Kconfig
+--- a/hw/arm/Kconfig
++++ b/hw/arm/Kconfig
+@@ -292,6 +292,8 @@
+     select XILINX_SPIPS
+     select XLNX_ZYNQ_DDRC
+     select ZYNQ_DEVCFG
++    select I2C
++    select AT24C
+ 
+ config ARM_V7M
+     bool
+diff -ru a/hw/arm/meson.build b/hw/arm/meson.build
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -15,7 +15,7 @@
+ arm_common_ss.add(when: 'CONFIG_SBSA_REF', if_true: files('sbsa-ref.c'))
+ arm_common_ss.add(when: 'CONFIG_STELLARIS', if_true: files('stellaris.c'))
+ arm_common_ss.add(when: 'CONFIG_STM32VLDISCOVERY', if_true: files('stm32vldiscovery.c'))
+-arm_common_ss.add(when: 'CONFIG_ZYNQ', if_true: files('xilinx_zynq.c'))
++arm_common_ss.add(when: 'CONFIG_ZYNQ', if_true: files('xilinx_zynq.c', 'web888.c'))
+ arm_common_ss.add(when: 'CONFIG_SABRELITE', if_true: files('sabrelite.c'))
+ 
+ arm_common_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m.c'))
+diff -ru a/hw/arm/xilinx_zynq.c b/hw/arm/xilinx_zynq.c
+--- a/hw/arm/xilinx_zynq.c
++++ b/hw/arm/xilinx_zynq.c
+@@ -42,6 +42,7 @@
+ #include "target/arm/cpu-qom.h"
+ #include "qapi/visitor.h"
+ #include "hw/arm/xilinx_zynq.h"
++#include "hw/arm/web888.h"
+ 
+ /* board base frequency: 33.333333 MHz */
+ #define PS_CLK_FREQUENCY (100 * 1000 * 1000 / 3)
+@@ -450,6 +451,10 @@
+     zynq_binfo.board_setup_addr = BOARD_SETUP_ADDR;
+     zynq_binfo.write_board_setup = zynq_write_board_setup;
+ 
++    if (object_dynamic_cast(OBJECT(machine), TYPE_WEB888_MACHINE)) {
++        web888_board_init(machine, pic);
++    }
++
+     arm_load_kernel(zynq_machine->cpu[0], machine, &zynq_binfo);
+ }
+ 
+diff -ru a/hw/gpio/meson.build b/hw/gpio/meson.build
+--- a/hw/gpio/meson.build
++++ b/hw/gpio/meson.build
+@@ -4,6 +4,7 @@
+ system_ss.add(when: 'CONFIG_PCA9552', if_true: files('pca9552.c'))
+ system_ss.add(when: 'CONFIG_PCA9554', if_true: files('pca9554.c'))
+ system_ss.add(when: 'CONFIG_PL061', if_true: files('pl061.c'))
++system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq_gpio.c'))
+ system_ss.add(when: 'CONFIG_ZAURUS_SCOOP', if_true: files('zaurus.c'))
+ 
+ system_ss.add(when: 'CONFIG_IMX', if_true: files('imx_gpio.c'))
+diff -ru a/hw/i2c/meson.build b/hw/i2c/meson.build
+--- a/hw/i2c/meson.build
++++ b/hw/i2c/meson.build
+@@ -1,5 +1,6 @@
+ i2c_ss = ss.source_set()
+ i2c_ss.add(when: 'CONFIG_I2C', if_true: files('core.c'))
++i2c_ss.add(when: 'CONFIG_ZYNQ', if_true: files('cadence_i2c.c'))
+ i2c_ss.add(when: 'CONFIG_SMBUS', if_true: files('smbus_slave.c', 'smbus_master.c'))
+ i2c_ss.add(when: 'CONFIG_ACPI_SMBUS', if_true: files('pm_smbus.c'))
+ i2c_ss.add(when: 'CONFIG_ACPI_ICH9', if_true: files('smbus_ich9.c'))
+diff -ru a/hw/misc/meson.build b/hw/misc/meson.build
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -96,7 +96,7 @@
+   'bcm2835_powermgt.c',
+ ))
+ system_ss.add(when: 'CONFIG_SLAVIO', if_true: files('slavio_misc.c'))
+-system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq_slcr.c'))
++system_ss.add(when: 'CONFIG_ZYNQ', if_true: files('zynq_slcr.c', 'web888_pl.c'))
+ system_ss.add(when: 'CONFIG_XLNX_ZYNQ_DDRC', if_true: files('xlnx-zynq-ddrc.c'))
+ system_ss.add(when: 'CONFIG_XLNX_ZYNQMP_ARM', if_true: files('xlnx-zynqmp-crf.c'))
+ system_ss.add(when: 'CONFIG_XLNX_ZYNQMP_ARM', if_true: files('xlnx-zynqmp-apu-ctrl.c'))
