@@ -1,0 +1,57 @@
+# Stock firmware: facts from a running unit
+
+Read-only inventory of a Web-888 running the stock 2026-09 release
+(`tools/probe-readonly.sh`, plus one `tools/zynqsdr-probe` run with the
+server stopped). These are interface facts the open FPGA, driver and server
+need to match.
+
+## Software
+
+- Kernel `6.6.110-xilinx` (built 2025-10-18), Alpine 3.20 diskless (tmpfs
+  root, `lbu` apkovl, modloop). The SD card (FAT) is mounted read-only at
+  `/media/mmcblk0p1`.
+- The bitstreams on the card are byte-identical to those in the
+  `web-888-alpine-3.20-armv7-20260919` release (sha256 HF `cacb1968…c0b3d6`,
+  VHF `298415f0…7513e`).
+- The automatic updater replaces `websdr.bin` **and** `websdr_{hf,vhf}.bit`
+  (an `update/checksum` file lists all three, and `.old` copies are kept).
+- The server runs as OpenRC service `sdrd` under `supervise-daemon` (respawn
+  after 2 s, unlimited). `start_pre` copies `websdr.bin` and `config/*` from
+  the card to `/root`.
+- The server's only device fds are `/dev/i2c-0` (Si5351, EEPROM) and
+  `/dev/zynqsdr`. It never `mmap`s the device: all sample data goes through
+  the `RX_READ`/`WF_READ` ioctls. It opens `/dev/zynqsdr` once per server
+  start.
+- Ports: 8073/tcp (web), 40410/udp (server), gpsd on localhost.
+
+## FPGA
+
+- **HF bitstream signature `0xAA55020C`: 12 RX channels**, 2 WF. The VHF
+  bitstream (ADC < 100 MHz) has 13 RX (RaspSDR/server#58). The server sets
+  the RX frame stride from the signature. See `stability-64mhz.md` for why
+  HF went from 13 to 12.
+- The `GET_DNA` value fed through the stock driver's device binding
+  reproduces the unit's eth0 MAC. This confirms the DNA layout (low word at
+  STS 0x0C, high at 0x10) as the stock driver uses it.
+- No PL interrupts are registered (the IRQ_F2P lines are unused). CMA is
+  16 MiB at 0x1f000000.
+
+## Device tree (live)
+
+```
+zynqsdr { compatible = "rx888,zynqsdr";
+          gpios = <&gpio0 10 1>, <&gpio0 13 1>, <&gpio0 12 1>,
+                  <&gpio0 11 1>, <&gpio0 49 1>;          /* all active-low */
+          interrupts = <0 29 1>, <0 30 1>, <0 31 1>, <0 32 1>; };  /* IRQ_F2P[3:0] */
+pps     { compatible = "pps-gpio"; gpios = <&gpio0 54 0>; capture-clear; };
+fpga-full { compatible = "fpga-region"; fpga-mgr = <&devcfg>; };  /* no PL nodes */
+```
+
+GPIO order: 0 HF/VHF switch, 1 AD8370 CLK, 2 AD8370 LATCH, 3 AD8370 DATA,
+4 ref-clock select. PPS reaches the kernel on EMIO GPIO 54 (`/dev/pps0`,
+used by gpsd and chrony), so the open FPGA routes PPS to `GPIO_I[0]`.
+
+## Load (12 users: 10 FT8 decoders, 4 DRM workers)
+
+`websdr.bin` runs 50 threads with 62 MB RSS. The CPU is about 41 % busy,
+the load average about 5.7, and the die temperature (XADC) about 62 °C.
