@@ -21,9 +21,12 @@
 #include "hw/core/sysbus.h"
 #include "hw/core/boards.h"
 #include "hw/core/irq.h"
+#include "system/reset.h"
 #include "hw/i2c/i2c.h"
 #include "hw/nvram/eeprom_at24c.h"
 #include "hw/arm/xilinx_zynq.h"
+#include "hw/arm/boot.h"
+#include "target/arm/arm-powerctl.h"
 #include "hw/arm/web888.h"
 #include "hw/misc/web888_pl.h"
 #include "hw/i2c/cadence_i2c.h"
@@ -53,7 +56,52 @@ static bool parse_mac(const char *str, uint8_t mac[6])
     return true;
 }
 
-void web888_board_init(MachineState *machine, qemu_irq *pic)
+/*
+ * SMP: the secondary CPU starts powered off and is released through the
+ * SLCR A9_CPU_RST_CTRL register like on hardware (Linux zynq platsmp puts
+ * a trampoline at address 0, then deasserts the CPU's reset).
+ */
+static void web888_cpu_reset_line(void *opaque, int n, int level)
+{
+    Web888MachineState *wm = opaque;
+
+    if (n == 0 || n >= ZYNQ_MAX_CPUS) {
+        return;
+    }
+    if (level && wm->cpu_on[n]) {
+        arm_set_cpu_off(n);
+        wm->cpu_on[n] = false;
+    } else if (!level && !wm->cpu_on[n]) {
+        if (arm_set_cpu_on(n, 0x0, 0, 1, false) ==
+            QEMU_ARM_POWERCTL_RET_SUCCESS) {
+            wm->cpu_on[n] = true;
+        }
+    }
+}
+
+static void web888_write_secondary(ARMCPU *cpu,
+                                   const struct arm_boot_info *info)
+{
+}
+
+static void web888_reset_secondary(ARMCPU *cpu,
+                                   const struct arm_boot_info *info)
+{
+    /* stays powered off ("start-powered-off") until the SLCR releases it */
+}
+
+static void web888_machine_reset(MachineState *machine, ResetType type)
+{
+    Web888MachineState *wm = WEB888_MACHINE(machine);
+
+    for (int i = 0; i < ZYNQ_MAX_CPUS; i++) {
+        wm->cpu_on[i] = i == 0;
+    }
+    qemu_devices_reset(type);
+}
+
+void web888_board_init(MachineState *machine, qemu_irq *pic,
+                       DeviceState *slcr, struct arm_boot_info *binfo)
 {
     Web888MachineState *wm = WEB888_MACHINE(machine);
     DeviceState *pl, *i2c, *gpio;
@@ -61,6 +109,13 @@ void web888_board_init(MachineState *machine, qemu_irq *pic)
     I2CBus *bus;
     uint8_t *rom = g_malloc0(WEB888_EEPROM_SIZE);
     uint8_t mac[6] = { 0x02, 0x88, 0x88, 0x00, 0x00, 0x01 };
+
+    binfo->write_secondary_boot = web888_write_secondary;
+    binfo->secondary_cpu_reset_hook = web888_reset_secondary;
+    for (int i = 0; i < ZYNQ_MAX_CPUS; i++) {
+        qdev_connect_gpio_out_named(slcr, "cpu-reset", i,
+            qemu_allocate_irq(web888_cpu_reset_line, wm, i));
+    }
 
     /* PL */
     pl = qdev_new(TYPE_WEB888_PL);
@@ -131,6 +186,7 @@ static void web888_machine_class_init(ObjectClass *oc, const void *data)
     mc->desc = "Web-888 SDR (Zynq-7010 + emulated FPGA logic)";
     mc->default_ram_size = 512 * MiB;
     mc->default_cpus = 2;
+    mc->reset = web888_machine_reset;
     object_class_property_add_str(oc, "mac", web888_get_mac, web888_set_mac);
     object_class_property_set_description(oc, "mac",
         "MAC address stored in the board EEPROM (offset 0x10), "

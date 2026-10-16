@@ -21,6 +21,9 @@ mode (`websdr_vhf.bit`, 13 RX):
 - `dmesg`: FPGA signature, "Genuine Web-888 Detected".
 - eth0 MAC, and `GET_DNA` (`tools/zynqsdr-probe`; stop `sdrd` first).
 - Server levels for a known signal (S-meter, waterfall), USB/LSB behaviour.
+- WF mode polarity: with `sdrd` stopped, `WF_START` with and without
+  `WF_READ_CONTINUES` (bit 16) and count the samples `WF_READ` returns
+  (8192 then stop = one-shot). See `fpga/doc/register-map.md`.
 
 ## 3. Open bitstream
 

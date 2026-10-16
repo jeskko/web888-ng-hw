@@ -25,15 +25,25 @@ if [ ! -f "$BUILD/dl/$TARBALL" ]; then
 fi
 echo "$QEMU_SHA256  $BUILD/dl/$TARBALL" | sha256sum -c --quiet
 
-if [ ! -f "$SRC/.web888-patched" ]; then
+APPLIED=$SRC/.web888-patches
+if [ ! -d "$SRC" ]; then
     echo ">> extracting"
-    rm -rf "$SRC"
     tar -C "$BUILD" -xf "$BUILD/dl/$TARBALL"
+fi
+if ! diff -qr "$EMU/qemu/patches" "$APPLIED" >/dev/null 2>&1; then
+    # patch set changed: revert what was applied before, apply the new one
+    if [ -d "$APPLIED" ]; then
+        for p in $(ls -r "$APPLIED"/*.patch); do
+            echo ">> reverting $(basename "$p")"
+            patch -d "$SRC" -p1 -R --quiet < "$p"
+        done
+        rm -rf "$APPLIED"
+    fi
     for p in "$EMU"/qemu/patches/*.patch; do
         echo ">> applying $(basename "$p")"
-        patch -d "$SRC" -p1 --forward < "$p"
+        patch -d "$SRC" -p1 --forward --quiet < "$p"
     done
-    touch "$SRC/.web888-patched"
+    cp -r "$EMU/qemu/patches" "$APPLIED"
 fi
 
 # new model sources (copied every time so edits are picked up)

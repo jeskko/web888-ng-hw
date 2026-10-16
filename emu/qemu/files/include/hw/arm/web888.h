@@ -17,9 +17,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(Web888MachineState, WEB888_MACHINE)
 struct Web888MachineState {
     ZynqMachineState parent;
     char *mac;
+    bool cpu_on[ZYNQ_MAX_CPUS];
 };
 
+struct arm_boot_info;
+
 /* Called from zynq_init() before the kernel is loaded. */
-void web888_board_init(MachineState *machine, qemu_irq *pic);
+void web888_board_init(MachineState *machine, qemu_irq *pic,
+                       DeviceState *slcr, struct arm_boot_info *binfo);
 
 #endif

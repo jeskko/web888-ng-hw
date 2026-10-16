@@ -117,3 +117,13 @@ samples after a (re)start are discarded internally (CIC settling).
 | 3 | PPS rising edge |
 
 EMIO GPIO 54 carries the raw PPS input for the kernel `pps-gpio` driver.
+
+### WF mode polarity (open question)
+
+CFG 0x9E bit n: this bitstream streams **continuously when the bit is set**
+and does a one-shot block when it is clear. The stock driver sets the bit
+for `WF_START` *without* `WF_READ_CONTINUES` and clears it *with* that flag.
+By the flag's name, the stock bitstream therefore treats 1 as one-shot,
+the opposite of ours. The stock server never passes the flag, so with this
+bitstream it always gets continuous streaming, which suits both of its
+waterfall patterns. To confirm on hardware: see `docs/hardware-test-plan.md`.
