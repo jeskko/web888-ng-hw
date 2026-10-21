@@ -50,7 +50,8 @@ MAC), or put `MAC=` and `DNA=` in `local.conf` (not versioned).
 ## Emulator changes to the vendor boot
 
 * Device tree (`make-dtb.sh`): initrd location from QEMU, a one-entry CPU
-  OPP table at the clock QEMU's SLCR gives (216.666 MHz; the stock server
-  reads cpufreq and crashes without it), USB disabled.
+  OPP table at the CPU clock Linux reads at boot (166.666 MHz, so cpufreq
+  never switches and guest time stays right; the stock server reads
+  cpufreq and crashes without it), USB disabled.
 * apkovl: root auto-login on the serial console (`AUTOLOGIN=0` to keep the
   vendor login).

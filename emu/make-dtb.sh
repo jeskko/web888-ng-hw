@@ -8,12 +8,17 @@
 # Changes against the vendor DT (all documented in README.md):
 #   * bootargs: no "initrd=0x3000000,4M"; QEMU loads the initramfs and
 #     passes its location in /chosen.
-#   * cpu@0: operating-points replaced by the one rate QEMU's SLCR reset
-#     values produce (ARM PLL 26 x 33.333 MHz / 4 = 216.666 MHz). With the
+#   * cpu@0: operating-points replaced by the one rate Linux reads from
+#     QEMU's SLCR at boot (166.666 MHz), so cpufreq never changes the
+#     clock. With the
 #     vendor 666/333 MHz table cpufreq-dt tries to switch, clk_set_rate
 #     fails with -EBUSY and cpufreq_online() BUG()s. Without any table
 #     there is no cpufreq sysfs, and the stock server dies reading
 #     scaling_cur_freq.
+#   * A9 global and TWD timers clocked from a fixed 100 MHz clock: QEMU's
+#     models tick every 10 ns whatever the SLCR says, while Linux would
+#     derive CPU/2 from the clock tree (83.33 MHz here: guest time 20 %
+#     fast).
 #   * usb@e0002000 and its ULPI phy disabled (QEMU's chipidea model has no
 #     ULPI viewport; probing only times out).
 #
@@ -46,12 +51,23 @@ BOOTARGS=${BOOTARGS:-console=ttyPS0,115200 earlycon modloop=modloop}
 	chosen {
 		bootargs = "$BOOTARGS";
 	};
+	emu_timer_clk: emu-timer-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <100000000>;
+	};
 	cpus {
 		cpu@0 {
-			operating-points = <216666 1000000>;
+			operating-points = <166666 1000000>;
 		};
 	};
 	axi {
+		timer@f8f00200 {
+			clocks = <&emu_timer_clk>;
+		};
+		timer@f8f00600 {
+			clocks = <&emu_timer_clk>;
+		};
 		usb@e0002000 {
 			status = "disabled";
 		};
