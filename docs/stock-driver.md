@@ -76,8 +76,15 @@ GPIO DT order (index → use): 0 HF/VHF switch, 1 AD8370 CLK, 2 AD8370 LATCH, 3 
 - On open, the stock driver checks that the **eth0 MAC address matches a value
   derived from the FPGA device DNA** (STS 0x0C). On a match it prints
   "Genuine Web-888 Detected".
-- Without a match, `RX_READ`/`WF_READ` return data only for the first 10 minutes
-  after boot, then 0 bytes (the ring keeps running).
+- Without a match, `RX_READ`/`WF_READ` deliver samples only until a deadline
+  set at driver probe: probe time + 600 s. The ring keeps running, but the
+  server receives only zeros. The deadline is in **wall-clock time**
+  (`ktime_get_with_offset`, apparently `TK_OFFS_REAL`). Probe runs at boot
+  while the clock still reads 1970, so the first NTP or `swclock` step
+  passes the deadline. In practice data stops as soon as the clock is set,
+  not after 10 minutes. The emulator (`emu/`) shows this: with a
+  non-matching MAC the stock server shows zero audio and waterfall about a
+  minute after boot.
 - The check is sticky per boot: once it passes, later opens skip it. After a
   failed check, the next open (e.g. a server restart) checks again.
 - Consequences:

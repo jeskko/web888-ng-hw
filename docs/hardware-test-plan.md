@@ -34,7 +34,9 @@ re-check the DNA. Then check, in this order:
 1. `dmesg`: signature `0x0E5D020C` (our VHF: `0x0E5D020D`) and **"Genuine
    Web-888 Detected"**. If the second is missing, the DNA bit order differs
    from the stock bitstream's: compare `GET_DNA` under stock and ours, then fix
-   `fpga/rtl/dna_reader.v`.
+   `fpga/rtl/dna_reader.v`. Do this before debugging the signal path: on a
+   mismatch the stock driver hands the server zeros once NTP has set the
+   clock (`docs/stock-driver.md`), which looks like a dead ADC.
 2. The server starts, with audio and waterfall present (ADC format, PLL lock, DMA).
 3. Tuning accuracy and sideband (`Q_NEG`), levels vs. stock (scale).
 4. Waterfall zoom levels, time-shared mode with > 2 users.

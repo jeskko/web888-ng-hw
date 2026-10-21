@@ -8,9 +8,12 @@
 # Changes against the vendor DT (all documented in README.md):
 #   * bootargs: no "initrd=0x3000000,4M"; QEMU loads the initramfs and
 #     passes its location in /chosen.
-#   * cpu@0: operating-points removed. QEMU's SLCR clock model does not
-#     produce the 666/333 MHz the OPP table lists, and cpufreq-dt then
-#     BUG()s while trying to switch to a listed frequency.
+#   * cpu@0: operating-points replaced by the one rate QEMU's SLCR reset
+#     values produce (ARM PLL 26 x 33.333 MHz / 4 = 216.666 MHz). With the
+#     vendor 666/333 MHz table cpufreq-dt tries to switch, clk_set_rate
+#     fails with -EBUSY and cpufreq_online() BUG()s. Without any table
+#     there is no cpufreq sysfs, and the stock server dies reading
+#     scaling_cur_freq.
 #   * usb@e0002000 and its ULPI phy disabled (QEMU's chipidea model has no
 #     ULPI viewport; probing only times out).
 #
@@ -45,7 +48,7 @@ BOOTARGS=${BOOTARGS:-console=ttyPS0,115200 earlycon modloop=modloop}
 	};
 	cpus {
 		cpu@0 {
-			/delete-property/ operating-points;
+			operating-points = <216666 1000000>;
 		};
 	};
 	axi {

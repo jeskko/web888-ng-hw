@@ -11,14 +11,14 @@ the model.
 Vendor binaries (kernel, initramfs, DTB, SD image) are extracted locally
 from the release zip and never committed.
 
-## Status (2026-10-16)
+## Status (2026-10-21)
 
 | milestone | state |
 |---|---|
 | A. QEMU builds; bare-metal test reads registers, RX/WF rings, PPS | done |
-| B. stock kernel boots to a shell | in progress (scripts below; not yet verified end to end) |
-| C. `zynqsdr` probes, signature/DNA via `tools/zynqsdr-probe` | open |
-| D. stock server streams, web UI on forwarded port 8073 | open |
+| B. stock kernel boots to a shell | done |
+| C. `zynqsdr` probes; signature and "Genuine" check with a matching MAC/DNA pair | done |
+| D. stock server streams, web UI on forwarded port 8073 | done (`tests/kiwi-check.py`: AM audio tone, waterfall carriers) |
 
 ## Files
 
@@ -27,9 +27,30 @@ from the release zip and never committed.
 * `make-dtb.sh`: emulator DT from the vendor DT (changes listed in the script header)
 * `run.sh`: boot (`--mac`, `--dna`, `--stock-sig`, `--sig`, `--scene` options)
 * `tests/vm.sh`: drive the serial console from scripts
+* `tests/kiwi-check.py`: Kiwi-protocol client; checks audio and waterfall
+  end to end (needs python3 `websocket-client` and `numpy`)
 * `scripts/bootbin.py`: boot.bin partition extraction
 
-The stock driver stops delivering data 10 minutes after boot unless the
-board MAC matches the one derived from the device DNA. Pass your own
-unit's pair with `--mac`/`--dna` (read with `tools/zynqsdr-probe`) for
-longer runs.
+## Quick start
+
+    FW_ZIP=/path/to/web-888-alpine-3.20-armv7-20260919.zip ./make-sdimage.sh
+    ./build-qemu.sh
+    tests/vm.sh start --stock-sig      # boots in ~1.5 min, root shell on ttyPS0
+    tests/vm.sh wait 'web-888:~# ' 300
+    tests/kiwi-check.py                # or open http://localhost:8073/
+    tests/vm.sh run 'dmesg | grep zynqsdr'
+    tests/vm.sh stop
+
+The stock driver hands the server only zeros once NTP has set the guest
+clock (about a minute after boot), unless the board MAC matches the one
+derived from the device DNA. Pass a matching pair with `--mac`/`--dna`,
+e.g. your own unit's (`GET_DNA` from `tools/zynqsdr-probe`, its eth0
+MAC), or put `MAC=` and `DNA=` in `local.conf` (not versioned).
+
+## Emulator changes to the vendor boot
+
+* Device tree (`make-dtb.sh`): initrd location from QEMU, a one-entry CPU
+  OPP table at the clock QEMU's SLCR gives (216.666 MHz; the stock server
+  reads cpufreq and crashes without it), USB disabled.
+* apkovl: root auto-login on the serial console (`AUTOLOGIN=0` to keep the
+  vendor login).

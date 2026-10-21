@@ -75,7 +75,8 @@ make hf vhf       # Vivado (PATH or local.mk; see doc/vivado-notes.md)
 1. **HP port width**: the vendor FSBL (`boot.bin`) programs the AFI; this
    design assumes 64-bit HP ports like Vivado's default.
 2. **DNA bit order**: must equal the vendor's or the stock driver's "genuine"
-   check (eth0 MAC = hash(DNA)) fails and data stops 10 min after boot.
+   check (eth0 MAC = hash(DNA)) fails and the stock driver delivers zeros
+   from the first clock set (NTP) on, which is in practice at once.
    Compare `GET_DNA` under the vendor and the open bitstream.
 3. **ADC format/timing**: offset binary assumed (as the working
    red-pitaya-notes port); IOB capture on the PLL clock with the same input

@@ -19,10 +19,12 @@
 #   --snapshot               don't write changes back to the SD image
 #   --log                    log PL register writes / Si5351 writes to stderr
 #
-# The stock zynqsdr driver only delivers samples for 10 minutes after boot
-# unless the eth0 MAC belongs to the board's FPGA DNA (its genuine-unit
-# check). To run longer, give the emulator your own unit's pair:
-# --dna <value from zynqsdr_probe> --mac <that unit's eth0 MAC>.
+# The stock zynqsdr driver hands the server zeros (from the first NTP
+# clock step, i.e. about a minute after boot) unless the eth0 MAC belongs
+# to the FPGA DNA (its genuine-unit check). Give the emulator a matching
+# pair, e.g. your own unit's: --dna <GET_DNA from zynqsdr_probe> --mac
+# <that unit's eth0 MAC>. Defaults can go in local.conf next to this
+# script (not versioned; shell syntax, sets MAC= and DNA=).
 set -euo pipefail
 . "$(dirname "$0")/scripts/common.sh"
 
@@ -39,6 +41,7 @@ SMP=2
 SNAPSHOT=
 LOG=0
 EXTRA=()
+[ -f "$EMU/local.conf" ] && . "$EMU/local.conf"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -54,7 +57,7 @@ while [ $# -gt 0 ]; do
     --snapshot) SNAPSHOT=,snapshot=on; shift ;;
     --log) LOG=1; shift ;;
     --) shift; EXTRA=("$@"); break ;;
-    -h|--help) sed -n '3,27p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,29p' "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 1 ;;
     esac
 done

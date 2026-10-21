@@ -5,14 +5,13 @@
 #   tests/vm.sh start [run.sh options]   boot in the background
 #   tests/vm.sh send 'command'           type a line on the console
 #   tests/vm.sh wait 'regex' [secs]      wait for output matching regex
-#   tests/vm.sh run 'command' [secs]     send, wait for the prompt, print output
+#   tests/vm.sh run 'command' [secs]     run, print output, exit with its status
 #   tests/vm.sh log                      console log so far
 #   tests/vm.sh stop
 set -euo pipefail
 EMU=$(cd "$(dirname "$0")/.." && pwd)
 D=${VM_DIR:-$EMU/build/vm}
 mkdir -p "$D"
-PROMPT='web-888:~# '
 
 clean() { tr -d '\r' < "$D/console.log" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'; }
 
@@ -40,16 +39,19 @@ wait)
     exit 1
     ;;
 run)
-    n=$(clean | grep -c -- "$PROMPT" || true)
-    "$0" send "$2"
+    # Bracket the output with markers that only appear on a line of their
+    # own once executed (ash redraws the prompt on long lines, so counting
+    # prompts is unreliable). Exit status: the command's.
+    m=vm$$_$RANDOM
+    "$0" send "echo ${m}_B; $2; echo ${m}_E\$?"
     t=${3:-60}
     for ((i = 0; i < t * 2; i++)); do
-        m=$(clean | grep -c -- "$PROMPT" || true)
-        [ "$m" -gt "$n" ] && break
+        clean | grep -Eq "^${m}_E[0-9]+\$" && break
         sleep 0.5
     done
-    clean | awk -v n="$n" -v p="$PROMPT" \
-        'index($0, p) { c++ } c > n' | sed '$d'
+    clean | awk -v b="${m}_B" -v e="^${m}_E" \
+        '$0 ~ e { sub(e, ""); rc = $0; exit } p { print } $0 == b { p = 1 }
+         END { exit rc == "" ? 124 : rc }'
     ;;
 log)
     clean
