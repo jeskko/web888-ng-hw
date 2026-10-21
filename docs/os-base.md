@@ -1,6 +1,6 @@
 # OS base for the open firmware
 
-Status: proposal, 2026-10-22. Decides what the open Web-888 image is built
+Status: **decided 2026-10-22: Yocto + RAUC**, built on a self-hosted runner. Decides what the open Web-888 image is built
 on once it no longer reuses the vendor's Alpine release.
 
 ## Requirements
@@ -41,14 +41,35 @@ pick up as is.
 
 ## Recommendation
 
-**Buildroot (LTS branch) + U-Boot + RAUC**, with Alpine diskless as a
-bring-up platform only if we need a quick image before that exists.
+**Yocto 6.0 "Wrynose" (LTS to April 2030) + meta-xilinx + meta-rauc,
+U-Boot**, set up with `kas` so a build is one command from a pinned layer
+list.
 
-Buildroot is the only option that meets every requirement without fighting
-the base. Yocto would also do, but costs far more to maintain and to build
-in CI. Alpine is what the vendor ships and is quick to start, but it has no
-rollback and its config save writes a tarball to FAT, which is the least
+Buildroot and Yocto give the same result on the device: read-only root,
+config partition, A/B with rollback. Yocto's usual drawback, CI cost,
+doesn't apply because a self-hosted runner is available at no cost. What
+remains are its advantages in the build and release process: SBOM, CVE and
+licence tooling, tested reproducibility, a 4-year LTS, alignment with
+AMD's BSP, product variants and an SDK (details below). Buildroot stays
+the fallback if the runner goes away. Alpine is what the vendor ships, but
+it has no rollback and its config save writes a tarball to FAT, the least
 power-safe write there is.
+
+### Self-hosted runner
+
+The repositories are public, so the runner must not run untrusted code:
+
+* The Yocto workflow runs only on pushes to `main` and on tags, never on
+  `pull_request`. PRs from forks build only on GitHub-hosted runners (lint,
+  tests, the `kas` config check).
+* Ephemeral runner: a fresh VM or container per job, no long-lived
+  credentials; release signing keys never live on the runner.
+* Network: outbound internet only, no route to the internal network or
+  the production unit.
+* The same host serves the shared-state cache and the source downloads over
+  HTTP (`SSTATE_MIRRORS`, `PREMIRRORS`). Contributors point their local
+  builds at it, and incremental builds take minutes. Writes come only from
+  the CI job.
 
 ### Buildroot vs Yocto in CI
 
@@ -104,20 +125,21 @@ then only needed for what the emulator can't model.
 
 ### Steps
 
-1. Buildroot external tree (`BR2_EXTERNAL`) in this repo: Zynq-7010
-   defconfig, 6.18 LTS kernel, our DT, U-Boot with redundant env.
+1. `meta-web888` layer + `kas` config: machine `web888` (Zynq-7010, our
+   DT, U-Boot with redundant env), 6.18 LTS kernel with `fpga_manager`,
+   image recipe with a squashfs root, our packages (`web888d`, bitstream).
 2. Boot it in the emulator against `web888-pl`. The stock `zynqsdr` driver
    is built into the vendor kernel and is not available on ours, so radio
    access on this image needs the open kernel driver.
 3. RAUC A/B + config partition; power-loss tests in the emulator.
-4. CI builds the image; the Vivado bitstream comes in as an artifact.
+4. CI on the self-hosted runner builds the image; the Vivado bitstream
+   comes in as an artifact.
 
 Until the open kernel driver exists, the vendor kernel (with the stock
 driver) stays in use, as planned.
 
 ## Not verified
 
-* Which Buildroot branch becomes the next LTS (2025.02 is LTS until March 2028).
 * Debian's long-term armhf plans; Ubuntu 26.04 armhf images.
 * No public RAUC example for Zynq-7000 was found. The mechanism is plain
   U-Boot, so the risk is low.
