@@ -234,7 +234,7 @@ module tb_core;
     ctrl_set(1, 0);
     w32u(32'h92, 32'h1010_0000);
     w8(32'h96, 8'hf7); w8(32'h97, 8'h0f);
-    w16(32'h9e, 16'h0001);                 // bit0: continuous
+    w16(32'h9e, 16'h0000);                 // bit0 = 0: continuous (WF_READ_CONTINUES)
     ctrl_set(1, 1);
 
     // WF1: one-shot at decim 1 (full 122.88 MS/s burst), tone at +2 MHz
@@ -244,7 +244,7 @@ module tb_core;
     ctrl_set(2, 0);
     w32(32'h98, 32'h1020_0000);
     w8(32'h9c, 8'hf7); w8(32'h9d, 8'h0f);
-    w16(32'h9e, 16'h0001);                 // bit1 = 0: one-shot
+    w16(32'h9e, 16'h0002);                 // bit1 = 1: one-shot (plain WF_START)
     ctrl_set(2, 1);
 
     // let it run

@@ -279,7 +279,7 @@ module web888_core #(
   wire [15:0] wf0_len    = cfg[37*32+16 +: 16];        // 0x96
   wire [31:0] wf1_addr   = cfg[38*32 +: 32];           // 0x98
   wire [15:0] wf1_len    = cfg[39*32 +: 16];           // 0x9c
-  wire [15:0] wf_mode    = cfg[39*32+16 +: 16];        // 0x9e  bit n: 1 = continuous
+  wire [15:0] wf_mode    = cfg[39*32+16 +: 16];        // 0x9e  bit n: 1 = one-shot (stock)
 
   wire [31:0] pps_fifo_data;
   wire        pps_fifo_valid, pps_fifo_pop;
@@ -373,7 +373,7 @@ module web888_core #(
 
   axi_ring_writer #(.FIFO_AW(10)) wf0_dma (
     .clk(clk), .rst(rst), .enable(wf0_en), .base_addr(wf0_addr), .len_m1(wf0_len),
-    .oneshot(wf_mode[0] ? 16'd0 : WF_ONESHOT_BURSTS), .running(wf0_run), .ptr(wf0_ptr),
+    .oneshot(wf_mode[0] ? WF_ONESHOT_BURSTS : 16'd0), .running(wf0_run), .ptr(wf0_ptr),
     .burst_done(wf0_done), .overflow(wf0_ovf), .frames(), .drops(),
     .bursts(wf0_bursts), .bresp_err(wf0_bresp_err), .s_data(wf0_wd), .s_valid(wf0_wv),
     .m_axi_awid(m_axi_wf0_awid),
@@ -426,7 +426,7 @@ module web888_core #(
 
   axi_ring_writer #(.FIFO_AW(10)) wf1_dma (
     .clk(clk), .rst(rst), .enable(wf1_en), .base_addr(wf1_addr), .len_m1(wf1_len),
-    .oneshot(wf_mode[1] ? 16'd0 : WF_ONESHOT_BURSTS), .running(wf1_run), .ptr(wf1_ptr),
+    .oneshot(wf_mode[1] ? WF_ONESHOT_BURSTS : 16'd0), .running(wf1_run), .ptr(wf1_ptr),
     .burst_done(wf1_done), .overflow(wf1_ovf), .frames(), .drops(),
     .bursts(wf1_bursts), .bresp_err(wf1_bresp_err), .s_data(wf1_wd), .s_valid(wf1_wv),
     .m_axi_awid(m_axi_wf1_awid),

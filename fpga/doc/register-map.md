@@ -30,7 +30,7 @@ fix-up) and reads back what was written.
 | 0x96 | u16 | WF0 ring length − 1 (bursts) |
 | 0x98 | u32 | WF1 ring address |
 | 0x9C | u16 | WF1 ring length − 1 (bursts) |
-| 0x9E | u16 | WF mode, bit n for WF n: 1 = continuous ring, 0 = one-shot (256 bursts = 8192 samples) |
+| 0x9E | u16 | WF mode, bit n for WF n: 1 = one-shot (256 bursts = 8192 samples, then stop), 0 = continuous ring |
 
 A rising edge of an enable bit restarts that stream at ring offset 0 (after
 any outstanding bursts drain), latching address/length/mode at that moment.
@@ -118,12 +118,15 @@ samples after a (re)start are discarded internally (CIC settling).
 
 EMIO GPIO 54 carries the raw PPS input for the kernel `pps-gpio` driver.
 
-### WF mode polarity (open question)
+### WF mode polarity
 
-CFG 0x9E bit n: this bitstream streams **continuously when the bit is set**
-and does a one-shot block when it is clear. The stock driver sets the bit
-for `WF_START` *without* `WF_READ_CONTINUES` and clears it *with* that flag.
-By the flag's name, the stock bitstream therefore treats 1 as one-shot,
-the opposite of ours. The stock server never passes the flag, so with this
-bitstream it always gets continuous streaming, which suits both of its
-waterfall patterns. To confirm on hardware: see `docs/hardware-test-plan.md`.
+CFG 0x9E bit n = 1 makes WF n one-shot: one block of 8192 samples (256
+bursts), then the stream stops until the next enable edge. Bit n = 0
+streams continuously around the ring. The stock driver sets the bit for a
+plain `WF_START` and clears it for `WF_START | WF_READ_CONTINUES` (bit 16).
+The stock server never passes the flag and calls `WF_START` again for every
+waterfall line (seen in the emulator), so it relies on one-shot. Earlier
+builds of this bitstream had the polarity inverted, and the stock server
+then got a continuous stream: at decimation 1 that is 491 MB/s, more than
+the HP port takes. Still to confirm against the stock bitstream on
+hardware (`docs/hardware-test-plan.md`).

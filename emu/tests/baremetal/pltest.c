@@ -173,7 +173,7 @@ int main(void)
     cfg_u64(0x6C, nco(10000000));
     R32(CFG + 0x74) = 4;
     R16(CFG + 0x96) = 0x0FF7;
-    R16(CFG + 0x9E) = 0;            /* one-shot */
+    R16(CFG + 0x9E) = 1;            /* bit0 = 1: one-shot */
     R16(CFG + 0x00) = 0x0003;
     wait_ms(10);
     puts_("WF0 ptr ");

@@ -18,7 +18,7 @@
  *       full-scale real sine -> |I+jQ| = 2^29, CIC1 N=3 R=256 and
  *       CIC2 N=5 R=R2 magnitude response applied per line.
  *   WF: 2 slots, {I s16, Q s16}, rate fs/R, full-scale sine -> 2^14,
- *       CIC N=5 R; one-shot (8192 samples) or continuous ring (CFG 0x9e).
+ *       CIC N=5 R; one-shot (8192 samples, CFG 0x9e bit set) or continuous ring.
  *
  * Mixing is x * exp(-j w n): a tone at f_nco + d appears at +d.
  *
@@ -562,7 +562,8 @@ static void ctrl_changed(Web888PLState *s, uint16_t old, uint16_t ctrl)
             s->wf[w].run = false;
         }
         if (rise & bit) {
-            bool cont = cfg_get(s, CFG_WF_MODE, 2) & (1u << w);
+            /* CFG 0x9e bit n: 1 = one-shot (plain WF_START), 0 = continuous */
+            bool cont = !(cfg_get(s, CFG_WF_MODE, 2) & (1u << w));
             wf_rebuild(s, w);
             stream_start(&s->wf[w], cfg_get(s, wf_addr_off[w], 4),
                          cfg_get(s, wf_len_off[w], 2),

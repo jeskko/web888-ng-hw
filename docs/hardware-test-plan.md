@@ -23,7 +23,8 @@ mode (`websdr_vhf.bit`, 13 RX):
 - Server levels for a known signal (S-meter, waterfall), USB/LSB behaviour.
 - WF mode polarity: with `sdrd` stopped, `WF_START` with and without
   `WF_READ_CONTINUES` (bit 16) and count the samples `WF_READ` returns
-  (8192 then stop = one-shot). See `fpga/doc/register-map.md`.
+  (8192 then stop = one-shot). Expected: one-shot without the flag,
+  continuous with it (`fpga/doc/register-map.md`).
 
 ## 3. Open bitstream
 
