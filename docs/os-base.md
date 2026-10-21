@@ -23,7 +23,7 @@ on once it no longer reuses the vendor's Alpine release.
 |---|---|---|---|---|---|---|
 | **Alpine diskless** (vendor's choice; red-pitaya-notes) | good: 3.24 ships armv7 | root in tmpfs; `lbu commit` writes an overlay tarball to FAT | copy files to FAT by hand; no rollback | low | whole userland unpacked into RAM | FAT writes not power-safe, no A/B |
 | **Buildroot + RAUC** | excellent; any kernel | squashfs root A/B + small config partition | A/B with U-Boot boot counter, signed bundles | medium | smallest | we track CVEs ourselves (LTS branch helps) |
-| **Yocto 6.0 "Wrynose"** (+ meta-xilinx / AMD EDF) | excellent, vendor-backed, LTS to 2030 | `read-only-rootfs` + data partition | meta-rauc / meta-swupdate | high | small | builds need ~32 GB RAM / 140 GB disk: too big for standard CI runners |
+| **Yocto 6.0 "Wrynose"** (+ meta-xilinx / AMD EDF) | excellent, vendor-backed, LTS to 2030 | `read-only-rootfs` + data partition | meta-rauc / meta-swupdate | high | small | CI needs a self-hosted runner (see below) |
 | **Debian armhf** + overlayroot | supported (trixie) | bolted on (overlay on tmpfs) | apt (not atomic) or DIY | medium | large (systemd, ~60–120 MB) | writable by design; armhf long-term future unclear |
 | **OpenWrt** | `zynq` target alive (6.18), no Web-888 board | squashfs + **always writable** overlay | sysupgrade, no A/B | medium | very small | overlay model conflicts with requirement 1 |
 | NixOS, Fedora IoT, balenaOS, Ubuntu Core | no binary cache / armv7 dropped / no Zynq / heavy | — | — | — | — | not viable |
@@ -49,6 +49,27 @@ the base. Yocto would also do, but costs far more to maintain and to build
 in CI. Alpine is what the vendor ships and is quick to start, but it has no
 rollback and its config save writes a tarball to FAT, which is the least
 power-safe write there is.
+
+### Buildroot vs Yocto in CI
+
+Yocto's documented host needs (140 GB disk, 32 GB RAM) are for a graphical
+image. A console image like ours needs less. These are estimates, not
+measurements:
+
+| | Buildroot + RAUC | Yocto + meta-xilinx + meta-rauc |
+|---|---|---|
+| clean build, 4 cores | ~30–60 min | ~2–4 h |
+| disk | ~5–10 GB | ~40–60 GB (with `rm_work`) |
+| incremental | ~5–15 min with download/ccache cache | ~10–20 min with a warm shared-state cache of 10–30+ GB |
+| standard GitHub runner (4 CPU, 16 GB, 14 GB SSD; 10 GB Actions cache) | fits | doesn't fit: self-hosted runner (~8 cores, 32 GB, 200+ GB) or paid runners, plus a shared-state cache server |
+
+On the device both give the same result (read-only squashfs root, config
+partition, RAUC A/B with rollback). Yocto's extras are in the build and
+release process: SPDX SBOMs, CVE checks and licence manifests, tested
+binary reproducibility, a 4-year LTS, AMD BSP alignment (FSBL from the
+Vivado hardware export), easy product variants, an SDK. Buildroot covers
+the GPL obligations with `legal-info` and has simpler, faster builds, and
+its image-only model suits an appliance.
 
 ### Proposed SD layout
 
