@@ -48,6 +48,25 @@ re-check the DNA. Then check, in this order:
    PLL unlock count), and check that RX frames 0x30 keep advancing while
    drops 0x34 stay at 0.
 
-## 4. Revert
+## 4. Open driver (web888-ng-os image)
+
+Only after section 3 passed. Boot the web888-ng-os image (6.18 kernel,
+open driver `web888-sdr`, no bitstream loaded at boot), console attached:
+
+1. Before any bitstream load, `cat /sys/class/fpga_manager/fpga0/state`
+   and `busybox devmem 0xF8000900; busybox devmem 0xF8000240` (level
+   shifters, fabric resets) if available. Then `exec 3</dev/zynqsdr` must
+   fail with "No such device" and `dmesg` must show "PL not ready". **The
+   board must not hang**: this is the check the emulator can't do. If it
+   hangs, the driver's SLCR test is not enough.
+2. `web888d serve --bitstream websdr_hf.bit`: "fpga_manager" in its
+   log, then the signature in `dmesg`, then streaming as in section 3.
+3. `driver/test/zsdr-test` (stop web888d first). The emulator-specific
+   checks (carrier in channel 0, attenuator level, overrun skip) need an
+   antenna signal or a signal generator at 15 MHz; the rest must pass.
+4. Reload the bitstream while nothing has the device open (`web888d`
+   stopped, load again through `fpga_manager`), then open again.
+
+## 5. Revert
 
 Copy the `.orig` files back, or restore the baseline image.
