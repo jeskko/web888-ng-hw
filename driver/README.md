@@ -4,10 +4,14 @@ GPL-2.0-or-later. Replaces the closed `zynqsdr` driver that is built into
 the vendor kernel. Written only from `../docs/stock-driver.md` and
 `../fpga/doc/register-map.md` (no vendor code).
 
-Status: **builds, not yet tested**. Compiles warning-free (`W=1`) as an
-out-of-tree module against the 6.18 kernel of the Yocto image
-(web888-ng-os, linux-xlnx 6.18.10). Next: load it in the QEMU virtual
-Web-888 (`../emu/`) on that image and run web888d against it.
+Status: **works in the emulator**. Compiles warning-free (`W=1`) against
+the 6.18 kernel of the Yocto image (web888-ng-os, linux-xlnx 6.18.10).
+In the QEMU virtual Web-888 (`../emu/run.sh --kernel <6.18 zImage>`, vendor
+userspace) it binds to the vendor DT node, detects the open bitstream and
+its four interrupts, and an unmodified web888d serves HPSDR through it:
+4 receivers, correct frequencies and levels, the full 48 kS/s read from the
+ring. Not yet exercised: waterfall, PPS, `poll()`, overrun skipping,
+GPIOs/attenuator. Untested on hardware.
 
 ## What it does
 

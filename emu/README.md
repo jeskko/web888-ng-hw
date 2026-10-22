@@ -47,6 +47,19 @@ derived from the device DNA. Pass a matching pair with `--mac`/`--dna`,
 e.g. your own unit's (`GET_DNA` from `tools/zynqsdr-probe`, its eth0
 MAC), or put `MAC=` and `DNA=` in `local.conf` (not versioned).
 
+## Limits
+
+* **System calls are slow** (35–80 µs each, ~50× QEMU's usual). ARMv7
+  Linux uses software PAN (`CONFIG_CPU_SW_DOMAIN_PAN`), which rewrites
+  DACR around every user-memory access, and QEMU flushes its whole TLB on
+  each DACR write (`dacr_write()`, "domain not tracked in TLB"). Functional
+  tests are fine; CPU load and throughput numbers say nothing about the
+  real board. A kernel without SW PAN would be faster here, but that is a
+  security feature of the real image.
+* `--kernel FILE` boots another kernel (e.g. the Yocto 6.18 kernel) with
+  the vendor userspace. It has no stock `zynqsdr` driver, so the open
+  driver (`../driver/`) can be loaded with `insmod`.
+
 ## Emulator changes to the vendor boot
 
 * Device tree (`make-dtb.sh`): initrd location from QEMU, a one-entry CPU

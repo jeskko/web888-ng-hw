@@ -17,6 +17,7 @@
 #   --ssh-port N             host port forwarded to guest 22 (default 2222)
 #   --hpsdr-port N           host UDP port forwarded to guest 1024 (default 1024)
 #   --smp N                  CPUs (default 2)
+#   --kernel FILE            kernel zImage instead of the vendor one
 #   --snapshot               don't write changes back to the SD image
 #   --log                    log PL register writes / Si5351 writes to stderr
 #
@@ -42,6 +43,7 @@ HPSDR_PORT=1024
 SMP=2
 SNAPSHOT=
 LOG=0
+KERNEL=
 EXTRA=()
 [ -f "$EMU/local.conf" ] && . "$EMU/local.conf"
 
@@ -57,10 +59,11 @@ while [ $# -gt 0 ]; do
     --ssh-port) SSH_PORT=$2; shift 2 ;;
     --hpsdr-port) HPSDR_PORT=$2; shift 2 ;;
     --smp) SMP=$2; shift 2 ;;
+    --kernel) KERNEL=$2; shift 2 ;;
     --snapshot) SNAPSHOT=,snapshot=on; shift ;;
     --log) LOG=1; shift ;;
     --) shift; EXTRA=("$@"); break ;;
-    -h|--help) sed -n '3,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,31p' "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 1 ;;
     esac
 done
@@ -81,7 +84,7 @@ fi
 
 exec "$QEMU" -M "web888,mac=$MAC" -m 512M -smp "$SMP" \
     -display none -serial mon:stdio \
-    -kernel "$FW/zImage" -initrd "$FW/initramfs.cpio.gz" \
+    -kernel "${KERNEL:-$FW/zImage}" -initrd "$FW/initramfs.cpio.gz" \
     -dtb "$FW/web888-emu.dtb" \
     -drive "if=sd,index=0,format=raw,file=$FW/sd.img$SNAPSHOT" \
     -nic "user,mac=$MAC,hostfwd=tcp::$WEB_PORT-:8073,hostfwd=tcp::$SSH_PORT-:22,hostfwd=udp::$HPSDR_PORT-:1024" \

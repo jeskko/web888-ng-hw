@@ -111,6 +111,7 @@ struct zsdr {
 
 	u32 signature;
 	bool ext;		/* open bitstream: extension registers */
+	u16 ctrl;		/* shadow of CFG control (only this driver writes it) */
 	unsigned int nrx;
 
 	struct mutex lock;	/* ioctls; one opener at a time */
@@ -159,14 +160,25 @@ static u32 sts_r32(struct zsdr *z, u32 off)
 	return readl(z->sts + off);
 }
 
+/*
+ * Control register writes go through a shadow copy: each register access
+ * is an AXI transaction (and a costly exit in the emulator), and reads on
+ * the hot read path add up.
+ */
+static void ctrl_write(struct zsdr *z, u16 v)
+{
+	z->ctrl = v;
+	cfg_w16(z, CFG_CTRL, v);
+}
+
 static void ctrl_clear(struct zsdr *z, u16 bits)
 {
-	cfg_w16(z, CFG_CTRL, cfg_r16(z, CFG_CTRL) & ~bits);
+	ctrl_write(z, z->ctrl & ~bits);
 }
 
 static void ctrl_set(struct zsdr *z, u16 bits)
 {
-	cfg_w16(z, CFG_CTRL, cfg_r16(z, CFG_CTRL) | bits);
+	ctrl_write(z, z->ctrl | bits);
 }
 
 /* hardware write pointer of stream i, in bursts */
@@ -189,7 +201,7 @@ static u16 ctrl_bit(int i)
 
 static bool running(struct zsdr *z, int i)
 {
-	return cfg_r16(z, CFG_CTRL) & ctrl_bit(i);
+	return z->ctrl & ctrl_bit(i);
 }
 
 /* bytes of new data in stream i (ring position only) */
@@ -225,24 +237,28 @@ static void stream_reset(struct zsdr *z, int i)
 
 /*
  * RX with the open bitstream: STS 0x38 counts completed bursts since RX
- * start without wrapping, so a ring lap is visible. Skip to the newest
- * half ring, on a frame boundary, and count the loss.
+ * start without wrapping. It gives the bytes available with one register
+ * read, and a ring lap is visible: then skip to the newest half ring, on
+ * a frame boundary, and count the loss.
  */
-static void rx_check_overrun(struct zsdr *z)
+static u32 rx_avail_ext(struct zsdr *z)
 {
 	struct zsdr_stream *s = &z->s[S_RX];
 	u64 hw_abs = (u64)sts_r32(z, STS_RX_BURSTS) * BURST;
 	u32 fb = 8 * z->nrx;
 	u64 to;
 
-	if (hw_abs < s->rd_abs || hw_abs - s->rd_abs <= RING_BYTES - BURST)
-		return;
-	to = hw_abs - RING_BYTES / 2;
-	to = DIV_ROUND_UP_ULL(to, fb) * fb;
-	z->rx_overruns++;
-	z->rx_overrun_bytes += to - s->rd_abs;
-	s->rd_abs = to;
-	s->rd = do_div(to, RING_BYTES);
+	if (hw_abs < s->rd_abs)
+		return 0;		/* restart not visible yet */
+	if (hw_abs - s->rd_abs > RING_BYTES - BURST) {
+		to = hw_abs - RING_BYTES / 2;
+		to = DIV_ROUND_UP_ULL(to, fb) * fb;
+		z->rx_overruns++;
+		z->rx_overrun_bytes += to - s->rd_abs;
+		s->rd_abs = to;
+		s->rd = do_div(to, RING_BYTES);
+	}
+	return hw_abs - s->rd_abs;
 }
 
 /*
@@ -272,9 +288,9 @@ static long stream_read(struct zsdr *z, int i, u32 uaddr, u32 len)
 	if (!running(z, i))
 		return -EINVAL;
 	if (i == S_RX && z->ext)
-		rx_check_overrun(z);
-
-	n = min(avail(z, i), len);
+		n = min(rx_avail_ext(z), len);
+	else
+		n = min(avail(z, i), len);
 	while (done < n) {
 		chunk = min(n - done, RING_BYTES - s->rd);
 		dma_sync_single_for_cpu(z->dev, s->dma + s->rd, chunk,
@@ -304,7 +320,7 @@ static void stream_program(struct zsdr *z, int i)
 
 static void stop_all(struct zsdr *z)
 {
-	cfg_w16(z, CFG_CTRL, 0);
+	ctrl_write(z, 0);
 }
 
 /* --------------------------------------------------------------- GPIOs */
@@ -444,10 +460,10 @@ static __poll_t zsdr_poll(struct file *f, poll_table *wait)
 	mutex_lock(&z->lock);
 	if (data_ready(z))
 		mask |= EPOLLIN | EPOLLRDNORM;
-	if ((cfg_r16(z, CFG_CTRL) & CTRL_PPS) && pps_count(z))
+	if ((z->ctrl & CTRL_PPS) && pps_count(z))
 		mask |= EPOLLPRI;
 	if (!mask)
-		arm_irqs(z, cfg_r16(z, CFG_CTRL) & CTRL_PPS);
+		arm_irqs(z, z->ctrl & CTRL_PPS);
 	mutex_unlock(&z->lock);
 	return mask;
 }
