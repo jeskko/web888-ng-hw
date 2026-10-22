@@ -188,6 +188,33 @@ At T = 11 it is about 47. That fits, but leaves little for extras.
 Keeping the history in DDR doesn't work: every frame reads all M × T
 samples, 22 × the input rate, about 5 GB/s.
 
+### 3.4 On a real recording (2026-10-23)
+
+`examples/pfbwav.rs` runs a HackRF recording (7.68 MS/s around 8.6 MHz,
+40 m / 31 m / 41 m) through both paths:
+* today's iq-backend chain: NCO, CIC to 480 kS/s, CIC R=10, audio chain
+  at 48 kS/s
+* the complex channelizer: `PfbComplex`, 256 branches, the same 30 kHz
+  bins at 60 kS/s, then `PfbChannel`
+
+The two outputs are compared after aligning delay, gain and carrier
+phase, with fixed gain so the AGCs don't differ:
+
+| channel | where in its bin | level | difference left |
+|---|---|---|---|
+| FT8 7074 kHz, USB | +4.2 kHz | equal | **−62.8 dB** (16-bit WAV limit) |
+| AM 9540 kHz | +10.3 kHz | equal | −26.5 dB (400–3000 Hz) |
+| AM 7300 kHz | −10.3 kHz | equal | −29.3 dB |
+
+* The channelizer path is 2.7 samples (0.2 ms) earlier.
+* Its carrier phase differs by a constant (−11.3° here). In SSB that is
+  an inaudible all-pass phase.
+* AM's envelope detection mixes the 3–5 kHz sidebands, where the two
+  chains' filters differ slightly. The residual is audibly nothing, but
+  worth a look when the audio filters are tuned.
+* With AGC the levels agree within 0.2 dB and the spectra within
+  ±0.3 dB per 500 Hz.
+
 ### 3.3 First estimates (before the model)
 
 Prototype filter (Kaiser): pass ±21 kHz, stop ±39 kHz. The transition is
@@ -231,8 +258,8 @@ The model gives the real T, word lengths and ripple.
 1. **Software model** (server `crates/dsp/src/pfb.rs`): float reference
    and tests done; T sweep, noise floor against today's chain and the
    A9 fine-stage bench in §3.1. Recordings (8 bit, ~48 dB) can't show
-   effects at −100 dB; they get a listening check through the iq-backend
-   mode instead.
+   effects at −100 dB; they got a comparison and a listening check
+   through the complex bank instead (§3.4).
    * float reference: prototype design, analysis filter bank, per-user
      fine stage ✓
    * tests: bin placement, flatness, alias rejection, noise floor
