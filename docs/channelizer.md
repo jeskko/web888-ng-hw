@@ -188,7 +188,7 @@ At T = 11 it is about 47. That fits, but leaves little for extras.
 Keeping the history in DDR doesn't work: every frame reads all M × T
 samples, 22 × the input rate, about 5 GB/s.
 
-### 3.4 On a real recording (2026-10-23)
+### 3.3 On a real recording (2026-10-23)
 
 `examples/pfbwav.rs` runs a HackRF recording (7.68 MS/s around 8.6 MHz,
 40 m / 31 m / 41 m) through both paths:
@@ -215,7 +215,7 @@ phase, with fixed gain so the AGCs don't differ:
 * With AGC the levels agree within 0.2 dB and the spectra within
   ±0.3 dB per 500 Hz.
 
-### 3.3 First estimates (before the model)
+### 3.4 First estimates (before the model)
 
 Prototype filter (Kaiser): pass ±21 kHz, stop ±39 kHz. The transition is
 18 kHz at 122.88 MS/s = 1.46·10⁻⁴ cycles/sample; for 100 dB that needs
@@ -332,7 +332,7 @@ same time on one unit.
    and tests done; T sweep, noise floor against today's chain and the
    A9 fine-stage bench in §3.1. Recordings (8 bit, ~48 dB) can't show
    effects at −100 dB; they got a comparison and a listening check
-   through the complex bank instead (§3.4).
+   through the complex bank instead (§3.3).
    * float reference: prototype design, analysis filter bank, per-user
      fine stage ✓
    * tests: bin placement, flatness, alias rejection, noise floor
