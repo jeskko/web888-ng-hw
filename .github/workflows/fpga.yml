@@ -87,6 +87,20 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          pre=
+          case "$GITHUB_REF_NAME" in v0.*) pre=--prerelease ;; esac
+          {
+            echo "Open Web-888 FPGA bitstreams for the stock-compatible register map, built by CI (Vivado 2026.1) from this tag."
+            echo
+            echo "* \`websdr_hf.bit\`: HF, 12 RX + 2 WF (signature \`0x0E5D020C\`)"
+            echo "* \`websdr_vhf.bit\`: VHF, 13 RX + 2 WF (signature \`0x0E5D020D\`)"
+            echo "* \`SHA256SUMS\`, timing and utilization reports"
+            echo
+            sed 's/^/Timing (with guardband): /' out/wns.txt
+            if [ -n "$pre" ]; then
+              echo
+              echo "**Pre-release: not yet tested on hardware.** Simulation and timing only. Follow \`docs/hardware-test-plan.md\` before using it on a unit you can't power-cycle."
+            fi
+          } > notes.md
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --notes "FPGA bitstreams, built by CI (Vivado 2026.1)." \
-            out/*
+            --title "$GITHUB_REF_NAME" --notes-file notes.md $pre out/*
