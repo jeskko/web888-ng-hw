@@ -11,8 +11,8 @@ open bitstream can run unchanged on stock firmware. The driver functions are
 - `misc_register` → `/dev/zynqsdr`; one opener at a time (`mutex_trylock`, 3 retries × 1 s).
 - probe: 5 GPIOs from DT (`of_get_named_gpio` index 0..4), checks 4 IRQs exist (**never requested — driver polls**).
 - open: `ioremap` PL windows, reads signature, inits mutex, runs genuine check (below).
-- DMA buffers: `dma_alloc_attrs(0x7FC00)` per stream, allocated lazily on first RX_START / WF_START, kept until close.
-- Reads: `dma_sync_single_for_cpu` + `copy_to_user` from a 0x7FC00-byte ring; HW write pointer read from status regs.
+- DMA buffers: `dma_alloc_attrs(0x7FC00, GFP_KERNEL, attrs 0)` per stream, allocated lazily on first RX_START / WF_START, kept until close. Attrs 0 = coherent allocation, which on the Zynq (non-coherent HP port) is uncached memory: every read copies out of uncached RAM.
+- Reads: `dma_sync_single_for_cpu` (pointless on coherent memory) + `copy_to_user` from a 0x7FC00-byte ring; HW write pointer read from status regs.
 
 ## PL address windows
 | phys | size | content |
@@ -34,7 +34,7 @@ open bitstream can run unchanged on stock firmware. The driver functions are
 | 0x90 | u16 | RX DMA ring length − 1 in 128-byte units (0x0FF7 → 0x7FC00 B) | RX_START (first) |
 | 0x92 + 6·n | u32 | WF n DMA ring phys addr (unaligned!) | WF_START |
 | 0x96 + 6·n | u16 | WF n DMA ring length − 1 in 128-byte units (0x0FF7) | WF_START |
-| 0x9E | u16 | WF mode: bit n = 1 → one-shot (stop after a block), 0 → continuous (ioctl arg bit 16) | WF_START |
+| 0x9E | u16 | WF mode: bit n = 1 → one-shot (stop after a block), 0 → continuous. The stock driver always sets the bit (see WF_START) | WF_START |
 
 Hub must accept byte/halfword strobes and unaligned word access at 0x92/0x98 (compiler may split).
 
@@ -63,7 +63,7 @@ PPS_READ reads one u32 from 0x42000000 (ADC clocks between PPS edges).
 | 0x40045a07 | 7 | SET_GPIO | u32 | CFG 0x84 |
 | 0x80045a08 | 8 | GET_GPIO | →u32 | CFG 0x84 |
 | 0x80045a09 | 9 | GET_SIGNATURE | →u32 | STS 0x00 |
-| 0x40045a0a | 10 | WF_START | ch \| bit16 continuous | clr ctrl.(ch+1); alloc+program ring; set mode bit; set ctrl.(ch+1) |
+| 0x40045a0a | 10 | WF_START | ch (\| bit16, ignored) | clr ctrl.(ch+1); alloc+program ring; set mode bit; set ctrl.(ch+1). The code meant to clear the bit for arg bit 16 tests a local that WF_START never sets from the argument (0), so it always sets it: **no continuous mode**. Confirmed with the binary in the emulator. |
 | 0x400c5a0b | 11 | WF_PARAM | {u16 ch, u16 decim, u64 inc} | CFG 0x6C+12ch (only rewrites on change) |
 | 0xc00e5a0c | 12 | WF_READ | {u16 ch, void* buf, u32 len}→{.., read} | needs ctrl.(ch+1); ptr STS 0x06+2ch |
 | 0x40045a14 | 20 | PPS_START | bool | clr ctrl.7, udelay(50), set ctrl.7 if arg |

@@ -110,7 +110,7 @@ Bug: `GPIO_ANNENNA_MASK` is 0x7F (`peri.h:12`), so any antenna change also **cle
 * `dpump.rx_adc_ovfl` is never set, so `SND_FLAG_ADC_OVFL` (`rx/rx_sound.cpp:1274`) is never raised. **There is no ADC-overflow path from the FPGA.**
 
 **Bugs worth knowing for a reimplementation:**
-* `fpga_reset_wf` builds `data = wf_chan | WF_READ_CONTINUES` but passes `wf_chan` to the ioctl (`peri.cpp:366-372`). The driver **never sees the continuous flag**. Overlapped sampling (`rx_waterfall.cpp:913-921`) still issues repeated `WF_READ`s without a new `WF_START`, so the driver/FPGA must keep streaming after `WF_START` *(inference)*.
+* `fpga_reset_wf` builds `data = wf_chan | WF_READ_CONTINUES` but passes `wf_chan` to the ioctl (`peri.cpp:366-372`). The driver **never sees the continuous flag** (and would ignore it: the stock driver always selects one-shot, `docs/stock-driver.md`). Overlapped sampling (`rx_waterfall.cpp:913-921`) still issues repeated `WF_READ`s without a new `WF_START`, so the driver/FPGA must keep streaming after `WF_START` *(inference)*.
 * `RX_PARAM.channel` is filled with `(__u8)rx_chan` (`peri.cpp:245`).
 * `test-driver.cpp:35` passes `&int_clk` (pointer) to `CLK_SET`; production passes the value. Implement as **by value**.
 

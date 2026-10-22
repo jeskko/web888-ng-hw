@@ -122,10 +122,12 @@ EMIO GPIO 54 carries the raw PPS input for the kernel `pps-gpio` driver.
 
 CFG 0x9E bit n = 1 makes WF n one-shot: one block of 8192 samples (256
 bursts), then the stream stops until the next enable edge. Bit n = 0
-streams continuously around the ring. The stock driver sets the bit for a
-plain `WF_START` and clears it for `WF_START | WF_READ_CONTINUES` (bit 16).
-The stock server never passes the flag and calls `WF_START` again for every
-waterfall line (seen in the emulator), so it relies on one-shot. Earlier
+streams continuously around the ring. The stock driver means to clear the
+bit for `WF_START | WF_READ_CONTINUES` (bit 16), but a bug makes it set the
+bit for every `WF_START` (`docs/stock-driver.md`); the open driver honours
+the flag. The stock server never passes the flag anyway and calls
+`WF_START` again for every waterfall line (seen in the emulator), so it
+relies on one-shot. Earlier
 builds of this bitstream had the polarity inverted, and the stock server
 then got a continuous stream: at decimation 1 that is 491 MB/s, more than
 the HP port takes. Still to confirm against the stock bitstream on

@@ -21,10 +21,10 @@ mode (`websdr_vhf.bit`, 13 RX):
 - `dmesg`: FPGA signature, "Genuine Web-888 Detected".
 - eth0 MAC, and `GET_DNA` (`tools/zynqsdr-probe`; stop `sdrd` first).
 - Server levels for a known signal (S-meter, waterfall), USB/LSB behaviour.
-- WF mode polarity: with `sdrd` stopped, `WF_START` with and without
-  `WF_READ_CONTINUES` (bit 16) and count the samples `WF_READ` returns
-  (8192 then stop = one-shot). Expected: one-shot without the flag,
-  continuous with it (`fpga/doc/register-map.md`).
+- WF mode polarity: with `sdrd` stopped, `WF_START` and count the samples
+  `WF_READ` returns (8192 then stop = one-shot = mode bit 1). The stock
+  driver always sets the bit, so continuous (bit 0) can only be checked
+  with the open driver (section 4, `zsdr-test`).
 
 ## 3. Open bitstream
 

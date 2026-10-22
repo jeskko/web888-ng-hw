@@ -109,6 +109,17 @@ emu/tests/vm.sh start --kernel <6.18 zImage> [--stock-sig] [--dtb build/fw/web88
 # in the guest: insmod web888_sdr.ko pl_check=0; rc-service sdrd stop; ./zsdr-test
 ```
 
+`zsdr-test --bench SECS [--r2 N] [--wf DECIM]` is a benchmark with the
+stock ioctls only, so the same binary compares the stock driver (vendor
+kernel) and this one on the same bitstream: RX read greedily (like the
+stock server) and paced in 5 ms batches (like web888d), optionally
+continuous WF; it prints throughput against the expected rate, reads/s,
+ioctl time, copy MB/s and the process CPU share. Emulator numbers say
+nothing about the board. Expected difference on hardware: the stock
+driver copies from uncached (coherent) buffers, this one from cached
+buffers after an invalidate (`../docs/stock-driver.md`). Continuous WF
+only works with this driver: the stock one always selects one-shot.
+
 `zsdr-test --pl-up` (emulator only) sets the SLCR the way fpga_manager
 leaves it after a load, to exercise the PL readiness check with
 `pl_check=1`.

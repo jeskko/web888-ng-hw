@@ -4,12 +4,21 @@
  * driver. Written for the QEMU virtual Web-888 (default scene: a -40 dBFS
  * carrier at 15 MHz, fs 122.88 MHz) but safe on a board.
  *
- *   zsdr-test [-d /dev/zynqsdr]
+ *   zsdr-test [-d DEV]    run the checks; one line per check, exit 1 if any
+ *                         failed
+ *   zsdr-test [-d DEV] --bench SECS [--r2 N] [--adc HZ] [--wf DECIM]
+ *                         benchmark (stock ioctls only, so it compares the
+ *                         stock and the open driver on the same bitstream):
+ *                         RX at stage-2 decimation N (default 5: 96 kS/s
+ *                         at 122.88 MHz), read greedily (again at once, like
+ *                         the stock server) and paced (5 ms batches, like
+ *                         web888d); with --wf also continuous waterfall 0 at
+ *                         decimation DECIM, paced
  *   zsdr-test --pl-up     emulator only: set the SLCR as fpga_manager leaves
  *                         it after a load (level shifters on, fabric resets
  *                         released), for the driver's PL readiness check
  *
- * Prints one line per check and exits 1 if any failed.
+ * Emulator numbers say nothing about the board (syscalls are ~50x slow).
  */
 #include <errno.h>
 #include <math.h>
@@ -21,6 +30,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -366,6 +376,168 @@ static void t_pps(void)
 	ioctl(fd, ZSDR_PPS_START, 0);
 }
 
+/* ------------------------------------------------------------- benchmark */
+
+static double cpu_secs(const struct timeval *t)
+{
+	return t->tv_sec + t->tv_usec * 1e-6;
+}
+
+struct bench {
+	double secs, bytes, t_io, t_max, user, sys;
+	long reads, empty;
+	int have_stats;			/* open driver */
+	struct zsdr_stats s0, s1;
+};
+
+static void bench_begin(struct bench *b, struct rusage *ru)
+{
+	memset(b, 0, sizeof(*b));
+	b->have_stats = stats(&b->s0) == 0;
+	getrusage(RUSAGE_SELF, ru);
+	b->secs = now();
+}
+
+static void bench_end(struct bench *b, const struct rusage *ru0)
+{
+	struct rusage ru;
+
+	if (b->have_stats)
+		stats(&b->s1);
+	getrusage(RUSAGE_SELF, &ru);
+	b->secs = now() - b->secs;
+	b->user = (cpu_secs(&ru.ru_utime) - cpu_secs(&ru0->ru_utime)) / b->secs;
+	b->sys = (cpu_secs(&ru.ru_stime) - cpu_secs(&ru0->ru_stime)) / b->secs;
+}
+
+/* account one timed read of n bytes (or -errno) that took d seconds */
+static int bench_add(struct bench *b, long n, double d)
+{
+	if (n < 0) {
+		printf("bench: read failed: %s\n", strerror(-n));
+		return -1;
+	}
+	b->reads++;
+	b->empty += !n;
+	b->bytes += n;
+	b->t_io += d;
+	if (d > b->t_max)
+		b->t_max = d;
+	return 0;
+}
+
+/* sleep for the rest of a batch of `ms` at `bps` bytes/s after n bytes */
+static void pace(int ms, double bps, long n)
+{
+	double want = ms * 1e-3 * bps;
+
+	if (n < want)
+		usleep((useconds_t)((want - n) / bps * 1e6));
+}
+
+static void bench_print(const char *what, const struct bench *b, double bps)
+{
+	printf("%-12s %6.1f %% of %.0f B/s, %7.0f reads/s (%4.1f %% empty), "
+	       "%6.0f B/read\n", what, 100.0 * b->bytes / b->secs / bps, bps,
+	       b->reads / b->secs, 100.0 * b->empty / (b->reads ? b->reads : 1),
+	       b->bytes / (b->reads ? b->reads : 1));
+	printf("%-12s ioctl %6.1f us mean, %7.1f us max; copy %6.1f MB/s; "
+	       "CPU %5.1f %% (user %4.1f, sys %5.1f)\n", "",
+	       1e6 * b->t_io / (b->reads ? b->reads : 1), 1e6 * b->t_max,
+	       b->bytes / (b->t_io > 0 ? b->t_io : 1) / 1e6,
+	       100 * (b->user + b->sys), 100 * b->user, 100 * b->sys);
+	if (b->have_stats && b->s1.rx_overruns != b->s0.rx_overruns)
+		printf("%-12s %u RX overruns, %llu bytes skipped\n", "",
+		       b->s1.rx_overruns - b->s0.rx_overruns,
+		       (unsigned long long)(b->s1.rx_overrun_bytes - b->s0.rx_overrun_bytes));
+}
+
+static void bench_rx(unsigned int r2, double adc, double secs, int paced_ms)
+{
+	static char buf[RING];
+	double bps = adc / (256.0 * r2) * 8 * nrx, t;
+	struct bench b;
+	struct rusage ru;
+	unsigned int c;
+	long n;
+
+	for (c = 0; c < nrx; c++) {
+		struct zsdr_rx_param p = { .channel = c,
+					   .freq = phase(1000000.0 * (c + 1)) };
+
+		ioctl(fd, ZSDR_RX_PARAM, &p);
+	}
+	if (ioctl(fd, ZSDR_RX_START, r2) < 0) {
+		printf("bench: RX_START %u: %s\n", r2, strerror(errno));
+		return;
+	}
+	usleep(100000);
+	rx_read(buf, sizeof(buf));	/* start from an empty ring (may skip) */
+	bench_begin(&b, &ru);
+	do {
+		t = now();
+		n = rx_read(buf, sizeof(buf));
+		if (bench_add(&b, n, now() - t))
+			break;
+		if (paced_ms)
+			pace(paced_ms, bps, n);
+	} while (now() - b.secs < secs);
+	bench_end(&b, &ru);
+	bench_print(paced_ms ? "RX paced" : "RX greedy", &b, bps);
+}
+
+static void bench_wf(unsigned int decim, double adc, double secs)
+{
+	static char buf[RING];
+	struct zsdr_wf_param p = { .channel = 0, .decimate = decim,
+				   .freq = phase(10000000.0) };
+	double bps = adc / decim * 4, t;
+	struct bench b;
+	struct rusage ru;
+	long n;
+
+	if (ioctl(fd, ZSDR_WF_PARAM, &p) < 0 ||
+	    ioctl(fd, ZSDR_WF_START, ZSDR_WF_READ_CONTINUES) < 0) {
+		printf("bench: WF start: %s\n", strerror(errno));
+		return;
+	}
+	usleep(100000);
+	wf_read(0, buf, sizeof(buf));
+	bench_begin(&b, &ru);
+	do {
+		t = now();
+		n = wf_read(0, buf, sizeof(buf));
+		if (bench_add(&b, n, now() - t))
+			break;
+		pace(5, bps, n);
+	} while (now() - b.secs < secs);
+	bench_end(&b, &ru);
+	bench_print("WF0 paced", &b, bps);
+	ioctl(fd, ZSDR_WF_START, 0);	/* one-shot: stops after a block */
+}
+
+static int bench(double secs, unsigned int r2, double adc, unsigned int wf_decim)
+{
+	struct zsdr_stats st;
+	uint32_t sig = 0;
+	int have;
+
+	ioctl(fd, ZSDR_GET_SIGNATURE, &sig);
+	nrx = sig & 0xf;
+	have = stats(&st) == 0;
+	printf("bench: signature 0x%08x, %u RX channels, R2 %u (%.0f frames/s), "
+	       "%s driver, %.0f s per run\n", sig, nrx, r2, adc / (256.0 * r2),
+	       have ? "open" : "stock", secs);
+	bench_rx(r2, adc, secs, 0);
+	bench_rx(r2, adc, secs, 5);
+	if (wf_decim)
+		bench_wf(wf_decim, adc, secs);
+	if (have && stats(&st) == 0 && st.ext)
+		printf("FPGA: %u RX frames dropped in the FIFO since the last start\n",
+		       st.rx_frames_dropped);
+	return 0;
+}
+
 static int pl_up(void)
 {
 	int m = open("/dev/mem", O_RDWR | O_SYNC);
@@ -391,16 +563,44 @@ static int pl_up(void)
 
 int main(int argc, char **argv)
 {
-	const char *dev = argc > 2 && !strcmp(argv[1], "-d") ? argv[2] : "/dev/zynqsdr";
+	const char *dev = "/dev/zynqsdr";
+	double bench_secs = 0, adc = FS;
+	unsigned int r2 = 5, wf_decim = 0;
+	int i;
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	if (argc > 1 && !strcmp(argv[1], "--pl-up"))
-		return pl_up();
+	for (i = 1; i < argc; i++) {
+		const char *v = i + 1 < argc ? argv[i + 1] : NULL;
+
+		if (!strcmp(argv[i], "--pl-up"))
+			return pl_up();
+		if (!v) {
+			fprintf(stderr, "usage: see the comment at the top of zsdr-test.c\n");
+			return 2;
+		}
+		if (!strcmp(argv[i], "-d"))
+			dev = v;
+		else if (!strcmp(argv[i], "--bench"))
+			bench_secs = atof(v);
+		else if (!strcmp(argv[i], "--r2"))
+			r2 = atoi(v);
+		else if (!strcmp(argv[i], "--adc"))
+			adc = atof(v);
+		else if (!strcmp(argv[i], "--wf"))
+			wf_decim = atoi(v);
+		else {
+			fprintf(stderr, "unknown option %s\n", argv[i]);
+			return 2;
+		}
+		i++;
+	}
 	fd = open(dev, O_RDWR);
 	if (fd < 0) {
 		printf("FAIL open %s: %s\n", dev, strerror(errno));
 		return 1;
 	}
+	if (bench_secs > 0)
+		return bench(bench_secs, r2, adc, wf_decim);
 	t_basic();
 	t_rx();
 	t_rx_overrun();
