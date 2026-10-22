@@ -133,13 +133,62 @@ NB/NR on, before the NEON/decimator work.
 The waterfall's CPU cost goes away with this design: the full-band
 power line comes from the FPGA, and zoom-FFTs run over a few bins.
 
-BRAM at T = 11:
-* history: 45 k samples × 16 bit ≈ 20 BRAM36
-* coefficients: 22.5 k × 18 bit (symmetric) ≈ 11
-* FFT and the rest: about 12
-* **total ≈ 43 of 60**
+BRAM: about 47 of 60 at T = 11 and 50 at T = 12, with the chosen
+widths and real BRAM layouts (§3.2). This first float-only estimate
+(~43) assumed perfect packing.
 
-### 3.2 First estimates (before the model)
+### 3.2 Fixed-point widths (2026-10-23)
+
+`crates/dsp/src/pfbfx.rs` models the integer datapath, sweeping widths
+with `examples/pfbfxmodel.rs`. The 4096-point real FFT is done the FPGA
+way: the real branch sums packed into 2048 complex values, a radix-2 FFT,
+then a split stage. The model runs on the same 16-bit samples as the
+float model and compares the two. The input is a tone at −1 dBFS or
+eight tones near full scale, both with ADC noise of 3 LSB rms. The
+measure is how far the fixed-point error stays below the ADC noise in a
+bin (bins away from the tones).
+
+| choice | error below noise (−1 dBFS tone / 8 tones) | saturations |
+|---|---|---|
+| 25-bit data, 18-bit twiddles, 18-bit coefficients, halving in all 11 stages | 13.8 / 16.5 dB | 0 |
+| same, halving in 5–7 stages | — | yes (tone) |
+| 22-bit data, best scaling | ≤ 9 dB | 0 |
+| 25-bit data, 18-bit twiddles, 18-bit coefficients, halving 4 first + 4 last | 16.2 / 23.9 dB | 0 |
+| **25-bit data, 18-bit twiddles, 20-bit coefficients, halving 4 first + 4 last** | **23.8 / 28.3 dB** | 0 |
+| same with 22- or 25-bit coefficients | 25.3 / 28.8 dB | 0 |
+
+* **Chosen** (`FixedSpec::recommended`):
+  * 16-bit ADC samples on the DSP48 B port, 20-bit coefficients on A
+  * branch sums exact (48-bit accumulators), rounded to 25-bit FFT data
+  * 18-bit twiddles
+  * a rounded halving after FFT stages 1–4 and 8–11
+* The fixed-point error is then ~24 dB below the ADC noise, about +0.02
+  dB on the floor. Nothing saturates for a −1 dBFS tone.
+* At least 8 halvings are needed: fewer saturate on a near-full-scale
+  tone. 16-bit twiddles cost 3–6 dB.
+* Output: bins as 32-bit I/Q, scaled so a full-scale sine reads 2^29,
+  like today's RX samples, so the server's `rx_to_c32` applies
+  unchanged. The 25 significant bits fit easily.
+* Bit-exact test vectors wait for the Verilog FFT architecture. A
+  radix-2² pipeline rounds at slightly different points than this
+  radix-2 model.
+
+**BRAM recount** at T = 12. A BRAM36 holds 2K×18, 16K×2 or 1K×36, so
+widths don't pack perfectly:
+
+| memory | layout | BRAM36 |
+|---|---|---|
+| sample history, 49 152 × 16 bit | 2K×18 | 24 |
+| coefficients, 24 576 × 20 bit (symmetric half) | 2K×18 + 16K×2 | ~13.5 |
+| FFT delay lines and twiddles, reorder buffer | | ~8 |
+| power accumulator, DMA FIFOs | | ~5 |
+| **total** | | **~50 of 60** |
+
+At T = 11 it is about 47. That fits, but leaves little for extras.
+Keeping the history in DDR doesn't work: every frame reads all M × T
+samples, 22 × the input rate, about 5 GB/s.
+
+### 3.3 First estimates (before the model)
 
 Prototype filter (Kaiser): pass ±21 kHz, stop ±39 kHz. The transition is
 18 kHz at 122.88 MS/s = 1.46·10⁻⁴ cycles/sample; for 100 dB that needs
@@ -189,9 +238,9 @@ The model gives the real T, word lengths and ripple.
    * tests: bin placement, flatness, alias rejection, noise floor
      against the current tuned chain
    * A9 bench of the fine stage per user
-2. **Fixed-point model**: word lengths per stage (ADC 16 bit, filter
-   accumulators, FFT growth/scaling), bit-exact reference vectors for the
-   Verilog.
+2. **Fixed-point model**: word lengths chosen (§3.2,
+   `crates/dsp/src/pfbfx.rs`). Bit-exact reference vectors follow once
+   the Verilog FFT architecture is fixed.
 3. **Verilog**: polyphase FIR, streaming real FFT, accumulator, bin
    selector, ring DMA; simulated (Icarus/Verilator) against the
    fixed-point vectors; synthesis in CI for resources and timing.
