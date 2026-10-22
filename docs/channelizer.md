@@ -240,6 +240,79 @@ M × T input samples. Ways to trade it:
 
 The model gives the real T, word lengths and ripple.
 
+## 3.5 Wideband I/Q streaming to a PC (prospect)
+
+Streaming a large slice of the band to a separate server or SDR program
+(SDR++, GQRX, ka9q-radio, a recorder) over Ethernet.
+
+**The link limits it, not the FPGA.** The unit has gigabit Ethernet on
+the PS side: Cadence GEM with an RTL8211E PHY on MIO pins, 1 Gbps, no
+jumbo frames. The PL can't reach the PHY, so every byte goes
+FPGA → DDR → Linux → GEM.
+
+| stream | rate | over GbE (~940 Mb/s payload) |
+|---|---|---|
+| whole band, 122.88 MS/s × 16 bit real | 1.97 Gb/s | no (12-bit packed: 1.47 Gb/s, still no) |
+| 30.72 MS/s complex (all of HF, ~0.5–28 MHz), 16 bit | 983 Mb/s | no |
+| same, 12-bit packed | 737 Mb/s | barely; ~5 dB worse floor (12 bits cuts into the ADC noise of ~3 LSB16 rms) |
+| 15.36 MS/s complex (~13 MHz slice), 16 bit | 492 Mb/s | yes, full quality |
+| 7.68 MS/s complex (~6.5 MHz), 16 bit | 246 Mb/s | comfortably |
+
+Lossless compression doesn't close the gap: real HF signals carry about
+10–12 bits of entropy per sample.
+
+**What the A9 can send is unknown.** 500 Mb/s is about 40 k
+packets/s through the Linux stack on 667 MHz cores. **Measure first on
+the test unit:** iperf3, then a UDP sender reading from a DMA ring
+(`sendmmsg`, maybe zero-copy).
+
+**Not from the channelizer's bins.** Bins are 2× oversampled, so
+streaming a contiguous run of them doubles the rate. The receiver would
+also have to re-synthesise them, which no common SDR program does. That
+is fine for narrow slices to a custom client, wrong for "the band to
+SDR++".
+
+**A wideband DDC:**
+* NCO, fs/4 real→complex step, then a cascade of half-band decimators
+  down to 30.72 / 15.36 / 7.68 / … MS/s complex, 16 bit (or 12 packed)
+* its own DMA ring
+* half-bands are cheap (most taps are zero, each stage at half the
+  rate): roughly 8–14 DSP, 2–3 k LUT, 1–2 BRAM
+
+Two ways to ship it:
+
+1. **In the channelizer bitstream:** about 54/80 DSP, ~11 k/17.6 k LUT,
+   ~50/60 BRAM together. One unit then serves web users from bins and a
+   PC from the wideband stream at once. In the lease model the stream is
+   one Protocol-class lease on the single wideband slot. Watch BRAM and
+   timing.
+2. **As its own loadable bitstream**, or its own firmware mode: the
+   whole FPGA for the wideband path, with no web receiver while it runs.
+   * **Simpler:** no resource or timing pressure from the channelizer.
+     BRAM to spare for a deep FIFO (smoothing the Linux side) and a
+     longer, sharper decimator chain. It could have several parallel
+     slices if the link allows, e.g. two 7.68 MS/s slices on different
+     bands.
+   * **Switching:** web888d loads bitstreams already (`bitstream =`,
+     via devcfg/fpga_manager). A mode switch (config or admin page)
+     stops the receiver service, loads the wideband bitstream and
+     starts the streaming server. A separate small daemon could do the
+     same.
+   * It can be built and tested independently of the channelizer, and
+     earlier, since it is much smaller.
+
+Which way depends on the throughput measurement and on whether
+"receiver for web users" and "front end for a PC" are wanted at the
+same time on one unit.
+
+**Protocols on the PC side:**
+* **SoapyRemote** first: SDR++, GQRX and CubicSDR use it through
+  SoapySDR, and it has a native 12-bit packed format (CS12).
+* **VITA-49 (VRT)** later: the standard for wideband I/Q, with real
+  sample timestamps from the GPS PPS (TDoA, research).
+* ka9q-radio: unclear whether it takes network I/Q as its front end;
+  to check.
+
 ## 4. Server side
 
 * New backend next to the stock-driver one: the `Radio` trait gains (or
@@ -285,3 +358,5 @@ The model gives the real T, word lengths and ripple.
   carry over? They should: the bank sees whatever is in the Nyquist zone.
 * GPS timestamps per frame (sample counter at each frame) for TDoA-grade
   I/Q: cheap, and planned with M6 anyway.
+* Wideband streaming (§3.5): in the channelizer bitstream or its own
+  bitstream/firmware mode? First, the A9's sustained UDP send rate.
