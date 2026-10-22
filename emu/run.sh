@@ -18,6 +18,9 @@
 #   --hpsdr-port N           host UDP port forwarded to guest 1024 (default 1024)
 #   --smp N                  CPUs (default 2)
 #   --kernel FILE            kernel zImage instead of the vendor one
+#   --initrd FILE|none       initramfs instead of the vendor one, or none
+#   --sd FILE                SD card image instead of build/fw/sd.img
+#   --append ARGS            kernel command line (overrides the DT's)
 #   --snapshot               don't write changes back to the SD image
 #   --log                    log PL register writes / Si5351 writes to stderr
 #
@@ -44,6 +47,9 @@ SMP=2
 SNAPSHOT=
 LOG=0
 KERNEL=
+INITRD=
+SD=
+APPEND=
 EXTRA=()
 [ -f "$EMU/local.conf" ] && . "$EMU/local.conf"
 
@@ -60,15 +66,24 @@ while [ $# -gt 0 ]; do
     --hpsdr-port) HPSDR_PORT=$2; shift 2 ;;
     --smp) SMP=$2; shift 2 ;;
     --kernel) KERNEL=$2; shift 2 ;;
+    --initrd) INITRD=$2; shift 2 ;;
+    --sd) SD=$2; shift 2 ;;
+    --append) APPEND=$2; shift 2 ;;
     --snapshot) SNAPSHOT=,snapshot=on; shift ;;
     --log) LOG=1; shift ;;
     --) shift; EXTRA=("$@"); break ;;
-    -h|--help) sed -n '3,31p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,34p' "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 1 ;;
     esac
 done
 
-for f in "$QEMU" "$FW/zImage" "$FW/initramfs.cpio.gz" "$FW/sd.img"; do
+KERNEL=${KERNEL:-$FW/zImage}
+SD=${SD:-$FW/sd.img}
+INITRD=${INITRD:-$FW/initramfs.cpio.gz}
+BOOT=(-kernel "$KERNEL")
+[ "$INITRD" != none ] && BOOT+=(-initrd "$INITRD")
+[ -n "$APPEND" ] && BOOT+=(-append "$APPEND")
+for f in "$QEMU" "$KERNEL" "$SD"; do
     [ -e "$f" ] || { echo "missing $f (run build-qemu.sh, make-sdimage.sh)" >&2; exit 1; }
 done
 [ -e "$FW/web888-emu.dtb" ] || "$EMU/make-dtb.sh"
@@ -84,8 +99,8 @@ fi
 
 exec "$QEMU" -M "web888,mac=$MAC" -m 512M -smp "$SMP" \
     -display none -serial mon:stdio \
-    -kernel "${KERNEL:-$FW/zImage}" -initrd "$FW/initramfs.cpio.gz" \
+    "${BOOT[@]}" \
     -dtb "$FW/web888-emu.dtb" \
-    -drive "if=sd,index=0,format=raw,file=$FW/sd.img$SNAPSHOT" \
+    -drive "if=sd,index=0,format=raw,file=$SD$SNAPSHOT" \
     -nic "user,mac=$MAC,hostfwd=tcp::$WEB_PORT-:8073,hostfwd=tcp::$SSH_PORT-:22,hostfwd=udp::$HPSDR_PORT-:1024" \
     "${PL[@]}" "${EXTRA[@]}"
