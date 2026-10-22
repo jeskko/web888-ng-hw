@@ -240,7 +240,7 @@ M × T input samples. Ways to trade it:
 
 The model gives the real T, word lengths and ripple.
 
-## 3.5 Wideband I/Q streaming to a PC (prospect)
+### 3.5 Wideband I/Q streaming to a PC (prospect)
 
 Streaming a large slice of the band to a separate server or SDR program
 (SDR++, GQRX, ka9q-radio, a recorder) over Ethernet.
