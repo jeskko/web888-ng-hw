@@ -94,6 +94,30 @@ aliased 100 dB down stays under it.
 The design attenuation has to match T: asking for more than T taps can
 give makes it worse (the 110 dB rows at T ≤ 11).
 
+**Noise floor against today's chain** (`examples/chancompare.rs`): the
+same ADC samples go through the channelizer (T = 11) and an exact model
+of the FPGA RX chain (NCO, CIC N=3 R=256, CIC N=5 R=10,
+`web888_iq::ddc`). The samples are white noise at the LTC2208's SNR
+plus strong carriers at each path's worst aliasing offsets around six
+FT8 dials (3.5–21 MHz). The table gives the USB 300–2700 Hz floor in dB
+re full-scale sine:
+
+| case | tuned chain | channelizer |
+|---|---|---|
+| noise only | −121.5 to −121.7 | −121.5 to −121.6 |
+| + 36 carriers at −26 dBFS | +0.1 dB | ≤ +0.1 dB |
+| + one carrier per dial at −10 dBFS, worst offset | +0.1 dB | **up to +2 dB** (+61.5 kHz; +1.5 dB in a transition-band case) |
+
+So T = 11 equals today's chain for carriers up to about −20 dBFS. At
+−10 dBFS (very strong for HF on this ADC) its aliases sit about 115 dB
+down, right at the floor. **T = 12** (110 dB, measured −112) closes
+that gap for about 3 more BRAM (≈ 46 of 60): the recommendation if BRAM
+allows, with T = 11 as the fallback.
+
+The harness has to wait out the carriers' switch-on (200 ms, longer than
+the audio filter's ~60 ms block); measuring earlier showed onset
+splatter as a fake +30 dB floor.
+
 **Per-user CPU** (`examples/bench.rs`, the `pfb fine stage` line, one A9
 core at nice 19 on the production unit, three runs):
 
@@ -156,9 +180,10 @@ The model gives the real T, word lengths and ripple.
 ## 5. Plan
 
 1. **Software model** (server `crates/dsp/src/pfb.rs`): float reference
-   and tests done; T sweep and A9 fine-stage bench in §3.1. Still to
-   do: noise floor against the current chain on recordings, and the
-   iq-backend mode.
+   and tests done; T sweep, noise floor against today's chain and the
+   A9 fine-stage bench in §3.1. Recordings (8 bit, ~48 dB) can't show
+   effects at −100 dB; they get a listening check through the iq-backend
+   mode instead.
    * float reference: prototype design, analysis filter bank, per-user
      fine stage ✓
    * tests: bin placement, flatness, alias rejection, noise floor
