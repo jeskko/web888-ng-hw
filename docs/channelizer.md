@@ -85,7 +85,7 @@ passband, relative to the tone. Ripple is across ±21 kHz.
 | 11 | 100 dB | **−101.2 dB** | 0.0001 dB |
 | 12 | 110 dB | −112.0 dB | < 0.0001 dB |
 
-The Kiwi-style ADC (16 bit, about 77 dB SNR over 61 MHz) has a noise
+The Web-888's ADC (LTC2208, 16 bit, about 77 dB SNR over 61 MHz) has a noise
 floor near −121 dBFS in a 2.4 kHz SSB channel. A signal at −20 dBFS
 aliased 100 dB down stays under it.
 * **T = 11** (100 dB) is the default.
