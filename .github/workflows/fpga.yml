@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: fpga
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["fpga/**", ".github/workflows/fpga.yml"]
+  pull_request:
+    paths: ["fpga/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fpga-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # RTL simulation on GitHub-hosted runners, also for pull requests.
+  sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y iverilog python3-numpy
+      - run: make -C fpga sim PYTHON=python3
+
+  # Bitstreams on the project's self-hosted Vivado runner (web888-ng-os
+  # ci/runner, instance "hw"). Never for pull requests (fork code must not
+  # reach the runner); off until the repository variable
+  # SELF_HOSTED_RUNNER is "true".
+  bitstreams:
+    if: github.event_name != 'pull_request' && vars.SELF_HOSTED_RUNNER == 'true'
+    needs: sim
+    runs-on: [self-hosted, linux, vivado]
+    timeout-minutes: 240
+    env:
+      VIVADO: /data/vivado/2026.1/Vivado/bin/vivado
+      LD_LIBRARY_PATH: /opt/vivado-compat
+      LD_PRELOAD: /lib/x86_64-linux-gnu/libudev.so.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: make -C fpga hf vhf VIVADO="$VIVADO" JOBS=8
+      - name: timing
+        # build.tcl only warns; a release must meet timing (with guardband)
+        run: |
+          for v in hf vhf; do
+            wns=$(sed -n 's/^WNS: \([-0-9.]*\) ns.*/\1/p' fpga/build/$v.log | tail -n 1)
+            echo "$v: WNS $wns ns" | tee -a "$GITHUB_STEP_SUMMARY"
+            awk -v w="$wns" 'BEGIN { exit !(w != "" && w + 0 >= 0) }' ||
+              { echo "::error::$v: timing not met (WNS '$wns')"; exit 1; }
+          done
+      - name: collect
+        run: |
+          mkdir out
+          for v in hf vhf; do
+            cp fpga/build/$v/websdr_$v.bit out/
+            cp fpga/build/$v/timing.txt out/timing_$v.txt
+            cp fpga/build/$v/utilization.txt out/utilization_$v.txt
+          done
+          cd out && sha256sum websdr_*.bit > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bitstreams
+          path: out/
+          if-no-files-found: error
+
+  # Tags: publish the bitstreams as release assets (web888-ng-os fetches
+  # them from there by checksum).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bitstreams
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bitstreams
+          path: out
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --notes "FPGA bitstreams, built by CI (Vivado 2026.1)." \
+            out/*
