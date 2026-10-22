@@ -547,6 +547,8 @@ static void ctrl_changed(Web888PLState *s, uint16_t old, uint16_t ctrl)
         s->r2 = r2 ? MIN(r2, 63) : 1;
         stream_start(&s->rx, cfg_get(s, CFG_RX_ADDR, 4),
                      cfg_get(s, CFG_RX_LEN, 2), rx_rate(s), 0);
+        /* test hook: start STS 0x38 near its wrap */
+        s->rx.bursts = s->rx_bursts_start;
         for (int ch = 0; ch < s->nrx; ch++) {
             rx_rebuild(s, ch);
         }
@@ -944,6 +946,7 @@ static const Property web888_pl_props[] = {
     DEFINE_PROP_UINT32("tick-us", Web888PLState, tick_us, 2000),
     DEFINE_PROP_BOOL("pps", Web888PLState, pps_present, true),
     DEFINE_PROP_UINT32("wf-cont-max", Web888PLState, wf_cont_max, 4000000),
+    DEFINE_PROP_UINT32("rx-bursts-start", Web888PLState, rx_bursts_start, 0),
     DEFINE_PROP_UINT64("seed", Web888PLState, seed, 1),
     DEFINE_PROP_BOOL("log", Web888PLState, log_regs, false),
 };

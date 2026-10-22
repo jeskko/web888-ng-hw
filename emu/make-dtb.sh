@@ -22,12 +22,19 @@
 #   * usb@e0002000 and its ULPI phy disabled (QEMU's chipidea model has no
 #     ULPI viewport; probing only times out).
 #
+# NG_NODE=1 also turns the vendor `zynqsdr` node into the web888-ng one
+# (compatible "web888-ng,sdr" with `reg`, see driver/README.md), for the
+# open driver:
+#
 #   ./make-dtb.sh           -> build/fw/web888-emu.dtb
+#   NG_NODE=1 ./make-dtb.sh -> build/fw/web888-emu-ng.dtb   (run.sh --dtb)
 set -euo pipefail
 . "$(dirname "$0")/scripts/common.sh"
 
 DTS=${DTS:-$EMU/../../upstream/firmware-20260919/boot.dts}
-OUT=$FW/web888-emu.dtb
+NG_NODE=${NG_NODE:-0}
+NAME=web888-emu$([ "$NG_NODE" = 1 ] && echo -ng)
+OUT=$FW/$NAME.dtb
 SRC_DTS=$FW/vendor.dts
 mkdir -p "$FW"
 
@@ -77,7 +84,14 @@ BOOTARGS=${BOOTARGS:-console=ttyPS0,115200 earlycon modloop=modloop}
 	};
 };
 EOF
-} > "$FW/web888-emu.dts"
+    [ "$NG_NODE" = 1 ] && cat <<EOF
 
-dtc -q -I dts -O dtb -o "$OUT" "$FW/web888-emu.dts"
+&{/zynqsdr} {
+	compatible = "web888-ng,sdr";
+	reg = <0x40000000 0xa0>, <0x41000000 0x40>, <0x42000000 0x1000>;
+};
+EOF
+} > "$FW/$NAME.dts"
+
+dtc -q -I dts -O dtb -o "$OUT" "$FW/$NAME.dts"
 echo ">> $OUT"

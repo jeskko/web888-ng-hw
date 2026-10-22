@@ -100,6 +100,7 @@ struct Web888PLState {
     uint32_t tick_us;
     bool pps_present;
     uint32_t wf_cont_max;   /* max continuous WF rate, samples/s */
+    uint32_t rx_bursts_start; /* STS 0x38 value at RX start (test hook) */
     uint64_t seed;
     bool log_regs;
 

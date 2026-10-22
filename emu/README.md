@@ -24,8 +24,11 @@ from the release zip and never committed.
 
 * `build-qemu.sh`: fetch QEMU 11.1.2, apply `qemu/patches/*`, copy `qemu/files/`, build arm-softmmu
 * `make-sdimage.sh`: SD image plus zImage/initramfs/DTB from the release zip (`FW_ZIP=...`)
-* `make-dtb.sh`: emulator DT from the vendor DT (changes listed in the script header)
-* `run.sh`: boot (`--mac`, `--dna`, `--stock-sig`, `--sig`, `--scene` options)
+* `make-dtb.sh`: emulator DT from the vendor DT (changes listed in the script header);
+  `NG_NODE=1` gives `web888-emu-ng.dtb` with the open driver's `web888-ng,sdr` node
+* `run.sh`: boot (`--mac`, `--dna`, `--stock-sig`, `--sig`, `--scene`, `--dtb` options;
+  model properties after `--`, e.g. `-- -global web888-pl.rx-bursts-start=4294940000`
+  to start the RX burst counter just before its 32-bit wrap)
 * `tests/vm.sh`: drive the serial console from scripts
 * `tests/kiwi-check.py`: Kiwi-protocol client; checks audio and waterfall
   end to end (needs python3 `websocket-client` and `numpy`)

@@ -20,11 +20,13 @@
 #include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/kref.h>
 #include <linux/math64.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
+#include <linux/slab.h>
 #include <linux/platform_device.h>
 #include <linux/poll.h>
 #include <linux/spinlock.h>
@@ -39,6 +41,18 @@
 #define CFG_PHYS	0x40000000
 #define STS_PHYS	0x41000000
 #define PPS_PHYS	0x42000000
+
+/*
+ * Zynq-7000 SLCR, read only here: PS-PL level shifters and fabric resets.
+ * A PL access while the PL is unconfigured, being reconfigured or held in
+ * reset never completes and hangs the CPU.
+ */
+#define SLCR_PHYS		0xf8000000
+#define SLCR_SIZE		0x1000
+#define SLCR_FPGA_RST_CTRL	0x240
+#define  FPGA_RST0		BIT(0)	/* FCLK_RESET0_N, the PL logic reset */
+#define SLCR_LVL_SHFTR_EN	0x900
+#define  LVL_SHFTR_ALL		0xf
 
 #define CFG_SIZE	0xa0
 #define STS_SIZE	0x40	/* stock maps 0x18; 0x18.. are extensions */
@@ -97,24 +111,35 @@ struct zsdr_stream {
 	dma_addr_t dma;
 	u32 rd;			/* read offset in the ring, bytes */
 	u64 rd_abs;		/* bytes consumed since start (RX, ext) */
+	u32 hw_last;		/* last STS 0x38 value (RX, ext) */
+	u32 hw_wraps;		/* its wraps since start */
 	int irq;		/* "burst done" interrupt, or < 0 */
 	bool armed;		/* irq enabled, waiting for a burst */
 };
 
+/*
+ * Lifetime: the probe holds one reference and each open file one more, so
+ * an unbind while the device is open leaves this structure (but not the
+ * DMA buffers or the register windows) to the last release.
+ */
 struct zsdr {
+	struct kref ref;
 	struct device *dev;
+	void __iomem *slcr;	/* NULL: not a Zynq-7000, no PL check */
 	void __iomem *cfg;
 	void __iomem *sts;
 	void __iomem *pps;
 	struct gpio_desc *gpio[NGPIOS];
 	struct miscdevice misc;
 
-	u32 signature;
+	bool gone;		/* unbound; under lock */
+	u32 signature;		/* read at open; 0 before the first one */
+	u32 build_id;		/* STS 0x18 at open (ext) */
 	bool ext;		/* open bitstream: extension registers */
 	u16 ctrl;		/* shadow of CFG control (only this driver writes it) */
 	unsigned int nrx;
 
-	struct mutex lock;	/* ioctls; one opener at a time */
+	struct mutex lock;	/* ioctls, open/release, remove */
 	atomic_t opened;
 	spinlock_t irq_lock;
 	wait_queue_head_t wq;
@@ -125,6 +150,16 @@ struct zsdr {
 	u32 rx_overruns;
 	u64 rx_overrun_bytes;
 };
+
+static bool pl_check = true;
+module_param(pl_check, bool, 0644);
+MODULE_PARM_DESC(pl_check,
+		 "refuse open unless the SLCR shows the PL out of reset with level shifters on (default 1)");
+
+static void zsdr_free(struct kref *ref)
+{
+	kfree(container_of(ref, struct zsdr, ref));
+}
 
 /* ------------------------------------------------------------ registers */
 
@@ -212,16 +247,6 @@ static u32 avail(struct zsdr *z, int i)
 	return (hw + RING_BYTES - z->s[i].rd) % RING_BYTES;
 }
 
-static bool data_ready(struct zsdr *z)
-{
-	int i;
-
-	for (i = 0; i < NSTREAMS; i++)
-		if (running(z, i) && avail(z, i))
-			return true;
-	return false;
-}
-
 static u32 pps_count(struct zsdr *z)
 {
 	return sts_r32(z, STS_PTR2PPS) >> 16;
@@ -233,24 +258,38 @@ static void stream_reset(struct zsdr *z, int i)
 {
 	z->s[i].rd = 0;
 	z->s[i].rd_abs = 0;
+	z->s[i].hw_last = 0;
+	z->s[i].hw_wraps = 0;
 }
 
 /*
+ * Bytes the reader may fall behind before RX skips ahead: a copy of a
+ * large read takes milliseconds, and the PL must not overwrite its start
+ * meanwhile (~7 ms at 96 kS/s with 12 channels).
+ */
+#define RX_MARGIN	(RING_BYTES / 8)
+
+/*
  * RX with the open bitstream: STS 0x38 counts completed bursts since RX
- * start without wrapping. It gives the bytes available with one register
- * read, and a ring lap is visible: then skip to the newest half ring, on
- * a frame boundary, and count the loss.
+ * start, so a ring lap is visible. Extended to 64 bits here: the 32-bit
+ * count wraps after 512 GiB (~17 h at 96 kS/s, 12 channels); every read
+ * sees it at least once per wrap. With the reader too far behind, skip to
+ * the newest half ring on a frame boundary and count the loss.
  */
 static u32 rx_avail_ext(struct zsdr *z)
 {
 	struct zsdr_stream *s = &z->s[S_RX];
-	u64 hw_abs = (u64)sts_r32(z, STS_RX_BURSTS) * BURST;
+	u32 raw = sts_r32(z, STS_RX_BURSTS);
 	u32 fb = 8 * z->nrx;
-	u64 to;
+	u64 hw_abs, to;
 
+	if (raw < s->hw_last)
+		s->hw_wraps++;
+	s->hw_last = raw;
+	hw_abs = ((u64)s->hw_wraps << 32 | raw) * BURST;
 	if (hw_abs < s->rd_abs)
 		return 0;		/* restart not visible yet */
-	if (hw_abs - s->rd_abs > RING_BYTES - BURST) {
+	if (hw_abs - s->rd_abs > RING_BYTES - RX_MARGIN) {
 		to = hw_abs - RING_BYTES / 2;
 		to = DIV_ROUND_UP_ULL(to, fb) * fb;
 		z->rx_overruns++;
@@ -379,24 +418,17 @@ static irqreturn_t burst_irq(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-/* enable the interrupts of the running streams until the next burst */
-static void arm_irqs(struct zsdr *z, bool pps)
+/* enable the stream (or PPS) interrupt until its next event */
+static void arm_irq(struct zsdr *z, int irq, bool *armed)
 {
 	unsigned long fl;
-	int i;
 
+	if (irq < 0)
+		return;
 	spin_lock_irqsave(&z->irq_lock, fl);
-	for (i = 0; i < NSTREAMS; i++) {
-		struct zsdr_stream *s = &z->s[i];
-
-		if (s->irq >= 0 && !s->armed && running(z, i)) {
-			s->armed = true;
-			enable_irq(s->irq);
-		}
-	}
-	if (pps && z->pps_irq >= 0 && !z->pps_armed) {
-		z->pps_armed = true;
-		enable_irq(z->pps_irq);
+	if (!*armed) {
+		*armed = true;
+		enable_irq(irq);
 	}
 	spin_unlock_irqrestore(&z->irq_lock, fl);
 }
@@ -427,15 +459,60 @@ static struct zsdr *to_zsdr(struct file *f)
 	return container_of(f->private_data, struct zsdr, misc);
 }
 
+/*
+ * The PL may be unconfigured (no bitstream yet, or being reloaded): check
+ * the PS side first, then that the logic answers with a known signature.
+ * Nothing touches the PL before this succeeds.
+ */
+static int pl_attach(struct zsdr *z)
+{
+	u32 sig;
+
+	if (z->slcr && pl_check) {
+		u32 lvl = readl(z->slcr + SLCR_LVL_SHFTR_EN);
+		u32 rst = readl(z->slcr + SLCR_FPGA_RST_CTRL);
+
+		if ((lvl & LVL_SHFTR_ALL) != LVL_SHFTR_ALL || (rst & FPGA_RST0)) {
+			dev_warn_ratelimited(z->dev,
+				"PL not ready (level shifters 0x%x, fabric resets 0x%x): bitstream not loaded?\n",
+				lvl, rst);
+			return -ENODEV;
+		}
+	}
+
+	sig = sts_r32(z, STS_SIG);
+	z->nrx = sig & 0xf;
+	if (!z->nrx || z->nrx > MAX_RX) {
+		dev_warn_ratelimited(z->dev, "no SDR logic (signature 0x%08x)\n",
+				     sig);
+		return -ENODEV;
+	}
+	if (sig != z->signature)
+		dev_info(z->dev, "signature 0x%08x (%s bitstream), %u RX channels\n",
+			 sig, (sig >> 16) == SIG_OPEN ? "open" : "stock", z->nrx);
+	z->signature = sig;
+	z->ext = (sig >> 16) == SIG_OPEN;
+	z->build_id = z->ext ? sts_r32(z, STS_BUILD) : 0;
+	stop_all(z);		/* as stock: open stops all streams */
+	return 0;
+}
+
 static int zsdr_open(struct inode *inode, struct file *f)
 {
 	struct zsdr *z = to_zsdr(f);
+	int ret;
 
+	/* misc_open() holds misc_mtx, so remove() can't have run yet */
 	if (atomic_cmpxchg(&z->opened, 0, 1))
 		return -EBUSY;
 	mutex_lock(&z->lock);
-	stop_all(z);		/* as stock: open stops all streams */
+	ret = pl_attach(z);
 	mutex_unlock(&z->lock);
+	if (ret) {
+		atomic_set(&z->opened, 0);
+		return ret;
+	}
+	kref_get(&z->ref);
 	return 0;
 }
 
@@ -444,26 +521,50 @@ static int zsdr_release(struct inode *inode, struct file *f)
 	struct zsdr *z = to_zsdr(f);
 
 	mutex_lock(&z->lock);
-	stop_all(z);
-	disarm_irqs(z);
+	if (!z->gone) {
+		stop_all(z);
+		disarm_irqs(z);
+	}
 	mutex_unlock(&z->lock);
 	atomic_set(&z->opened, 0);
+	kref_put(&z->ref, zsdr_free);
 	return 0;
 }
 
 static __poll_t zsdr_poll(struct file *f, poll_table *wait)
 {
 	struct zsdr *z = to_zsdr(f);
-	__poll_t mask = 0;
+	__poll_t mask = 0, req;
+	int i;
 
 	poll_wait(f, &z->wq, wait);
 	mutex_lock(&z->lock);
-	if (data_ready(z))
-		mask |= EPOLLIN | EPOLLRDNORM;
-	if ((z->ctrl & CTRL_PPS) && pps_count(z))
-		mask |= EPOLLPRI;
-	if (!mask)
-		arm_irqs(z, z->ctrl & CTRL_PPS);
+	if (z->gone) {
+		mutex_unlock(&z->lock);
+		return EPOLLERR | EPOLLHUP;
+	}
+	/*
+	 * Arm each requested source that has nothing yet, even when another
+	 * one is ready: a caller waiting only for POLLPRI must still be woken
+	 * by PPS while RX data piles up. Not gated on wait->_qproc: do_poll()
+	 * clears it after the first pass, and the re-checks after a wakeup
+	 * must re-arm. An arm on the last pass costs one interrupt.
+	 */
+	req = poll_requested_events(wait);
+	for (i = 0; i < NSTREAMS; i++) {
+		if (!running(z, i))
+			continue;
+		if (avail(z, i))
+			mask |= EPOLLIN | EPOLLRDNORM;
+		else if (req & (EPOLLIN | EPOLLRDNORM))
+			arm_irq(z, z->s[i].irq, &z->s[i].armed);
+	}
+	if (z->ctrl & CTRL_PPS) {
+		if (pps_count(z))
+			mask |= EPOLLPRI;
+		else if (req & EPOLLPRI)
+			arm_irq(z, z->pps_irq, &z->pps_armed);
+	}
 	mutex_unlock(&z->lock);
 	return mask;
 }
@@ -478,7 +579,7 @@ static void fill_stats(struct zsdr *z, struct zsdr_stats *st)
 	if (!z->ext)
 		return;
 	st->ext = 1;
-	st->build_id = sts_r32(z, STS_BUILD);
+	st->build_id = z->build_id;
 	st->adc_overflows = sts_r32(z, STS_ADC_OVF);
 	st->flags = sts_r32(z, STS_FLAGS);
 	st->adc_peak = sts_r32(z, STS_ADC_PEAK);
@@ -632,7 +733,7 @@ static long zsdr_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 	long r;
 
 	mutex_lock(&z->lock);
-	r = zsdr_ioctl_locked(z, cmd, arg);
+	r = z->gone ? -ENODEV : zsdr_ioctl_locked(z, cmd, arg);
 	mutex_unlock(&z->lock);
 	return r;
 }
@@ -653,6 +754,9 @@ static ssize_t signature_show(struct device *dev, struct device_attribute *a,
 {
 	struct zsdr *z = dev_get_drvdata(dev);
 
+	/* cached at open: reading the PL here could hang the CPU */
+	if (!z->signature)
+		return sysfs_emit(buf, "unknown\n");
 	return sysfs_emit(buf, "0x%08x\n", z->signature);
 }
 static DEVICE_ATTR_RO(signature);
@@ -662,9 +766,11 @@ static ssize_t bitstream_show(struct device *dev, struct device_attribute *a,
 {
 	struct zsdr *z = dev_get_drvdata(dev);
 
+	if (!z->signature)
+		return sysfs_emit(buf, "unknown\n");
 	if (!z->ext)
 		return sysfs_emit(buf, "stock\n");
-	return sysfs_emit(buf, "web888-ng %08x\n", sts_r32(z, STS_BUILD));
+	return sysfs_emit(buf, "web888-ng %08x\n", z->build_id);
 }
 static DEVICE_ATTR_RO(bitstream);
 
@@ -688,15 +794,42 @@ static void __iomem *map_window(struct platform_device *pdev, int idx,
 	return devm_ioremap(&pdev->dev, fallback, size) ?: IOMEM_ERR_PTR(-ENOMEM);
 }
 
+static void zsdr_put(void *data)
+{
+	struct zsdr *z = data;
+
+	kref_put(&z->ref, zsdr_free);
+}
+
+static void zsdr_free_bufs(void *data)
+{
+	struct zsdr *z = data;
+	int i;
+
+	for (i = 0; i < NSTREAMS; i++)
+		if (z->s[i].buf)
+			dma_free_noncoherent(z->dev, RING_BYTES, z->s[i].buf,
+					     z->s[i].dma, DMA_FROM_DEVICE);
+}
+
+/*
+ * No PL register access here: at boot the bitstream is usually not loaded
+ * yet. pl_attach() at open does it. The devm actions run in reverse order
+ * after remove(): interrupts, then buffers, then the probe's reference.
+ */
 static int zsdr_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct zsdr *z;
 	int i, ret;
 
-	z = devm_kzalloc(dev, sizeof(*z), GFP_KERNEL);
+	z = kzalloc(sizeof(*z), GFP_KERNEL);
 	if (!z)
 		return -ENOMEM;
+	kref_init(&z->ref);
+	ret = devm_add_action_or_reset(dev, zsdr_put, z);
+	if (ret)
+		return ret;
 	z->dev = dev;
 	mutex_init(&z->lock);
 	spin_lock_init(&z->irq_lock);
@@ -712,14 +845,12 @@ static int zsdr_probe(struct platform_device *pdev)
 	z->pps = map_window(pdev, 2, PPS_PHYS, PPS_SIZE);
 	if (IS_ERR(z->pps))
 		return PTR_ERR(z->pps);
-
-	z->signature = sts_r32(z, STS_SIG);
-	z->ext = (z->signature >> 16) == SIG_OPEN;
-	z->nrx = z->signature & 0xf;
-	if (!z->nrx || z->nrx > MAX_RX)
-		return dev_err_probe(dev, -ENODEV,
-				     "no SDR logic (signature 0x%08x)\n",
-				     z->signature);
+	if (of_machine_is_compatible("xlnx,zynq-7000")) {
+		/* owned by the SLCR syscon: map without requesting it */
+		z->slcr = devm_ioremap(dev, SLCR_PHYS, SLCR_SIZE);
+		if (!z->slcr)
+			return -ENOMEM;
+	}
 
 	for (i = 0; i < NGPIOS; i++) {
 		z->gpio[i] = devm_gpiod_get_index_optional(dev, NULL, i,
@@ -738,15 +869,16 @@ static int zsdr_probe(struct platform_device *pdev)
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (ret)
 		return ret;
+	ret = devm_add_action(dev, zsdr_free_bufs, z);
+	if (ret)
+		return ret;
 	for (i = 0; i < NSTREAMS; i++) {
 		struct zsdr_stream *s = &z->s[i];
 
 		s->buf = dma_alloc_noncoherent(dev, RING_BYTES, &s->dma,
 					       DMA_FROM_DEVICE, GFP_KERNEL);
-		if (!s->buf) {
-			ret = -ENOMEM;
-			goto free;
-		}
+		if (!s->buf)
+			return -ENOMEM;
 		s->irq = -ENXIO;
 	}
 
@@ -760,14 +892,12 @@ static int zsdr_probe(struct platform_device *pdev)
 		ret = devm_request_irq(dev, irq, burst_irq, IRQF_NO_AUTOEN,
 				       DRV_NAME, z);
 		if (ret)
-			goto free;
+			return ret;
 		if (i < NSTREAMS)
 			z->s[i].irq = irq;
 		else
 			z->pps_irq = irq;
 	}
-
-	stop_all(z);
 
 	z->misc.minor = MISC_DYNAMIC_MINOR;
 	z->misc.name = "zynqsdr";	/* the stock device name */
@@ -775,33 +905,32 @@ static int zsdr_probe(struct platform_device *pdev)
 	z->misc.parent = dev;
 	ret = misc_register(&z->misc);
 	if (ret)
-		goto free;
+		return ret;
 
-	dev_info(dev, "signature 0x%08x (%s bitstream), %u RX channels%s\n",
-		 z->signature, z->ext ? "open" : "stock", z->nrx,
-		 z->s[S_RX].irq < 0 ? ", no interrupts (poll() unavailable)" : "");
+	dev_info(dev, "registered%s%s\n",
+		 z->s[S_RX].irq < 0 ? ", no interrupts (poll() unavailable)" : "",
+		 z->slcr && pl_check ? "" : ", no PL readiness check");
 	return 0;
-
-free:
-	for (i = 0; i < NSTREAMS; i++)
-		if (z->s[i].buf)
-			dma_free_noncoherent(dev, RING_BYTES, z->s[i].buf,
-					     z->s[i].dma, DMA_FROM_DEVICE);
-	return ret;
 }
 
 static void zsdr_remove(struct platform_device *pdev)
 {
 	struct zsdr *z = platform_get_drvdata(pdev);
-	int i;
+	bool was_running;
 
-	misc_deregister(&z->misc);
-	stop_all(z);
+	misc_deregister(&z->misc);	/* waits out a running misc_open() */
+	mutex_lock(&z->lock);
+	/* streams run only after a successful open, so the PL is there */
+	was_running = z->ctrl;
+	if (was_running)
+		stop_all(z);
+	disarm_irqs(z);
+	z->gone = true;
+	mutex_unlock(&z->lock);
+	wake_up_interruptible(&z->wq);
 	/* let outstanding bursts drain before the buffers go away */
-	msleep(10);
-	for (i = 0; i < NSTREAMS; i++)
-		dma_free_noncoherent(z->dev, RING_BYTES, z->s[i].buf,
-				     z->s[i].dma, DMA_FROM_DEVICE);
+	if (was_running)
+		msleep(10);
 }
 
 static const struct of_device_id zsdr_of_match[] = {
