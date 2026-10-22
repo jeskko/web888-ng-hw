@@ -41,6 +41,9 @@ jobs:
       LD_PRELOAD: /lib/x86_64-linux-gnu/libudev.so.1
     steps:
       - uses: actions/checkout@v4
+      - name: licence
+        # warns 30 days ahead (exit 2), fails if expired or missing (1)
+        run: fpga/scripts/licence-check.sh > licence.txt || [ $? -eq 2 ]
       - name: build
         run: make -C fpga hf vhf VIVADO="$VIVADO" JOBS=8
       - name: timing
@@ -48,13 +51,14 @@ jobs:
         run: |
           for v in hf vhf; do
             wns=$(sed -n 's/^WNS: \([-0-9.]*\) ns.*/\1/p' fpga/build/$v.log | tail -n 1)
-            echo "$v: WNS $wns ns" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$v: WNS $wns ns" | tee -a "$GITHUB_STEP_SUMMARY" wns.txt
             awk -v w="$wns" 'BEGIN { exit !(w != "" && w + 0 >= 0) }' ||
               { echo "::error::$v: timing not met (WNS '$wns')"; exit 1; }
           done
       - name: collect
         run: |
           mkdir out
+          cp wns.txt licence.txt out/
           for v in hf vhf; do
             cp fpga/build/$v/websdr_$v.bit out/
             cp fpga/build/$v/timing.txt out/timing_$v.txt

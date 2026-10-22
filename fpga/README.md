@@ -65,7 +65,13 @@ effectively 131.6 MHz, +7 % over the 122.88 MHz ADC clock). VHF build (13 RX):
 ```sh
 make sim          # Icarus Verilog (PATH or local.mk) + numpy analysis
 make hf vhf       # Vivado (PATH or local.mk; see doc/vivado-notes.md)
+make ci           # both bitstreams on the project's CI runner -> build/ci/
 ```
+
+CI (`.github/workflows/fpga.yml`): simulation on every change under
+`fpga/`; bitstreams with a timing gate (WNS >= 0, with the guardband) on
+the project's self-hosted Vivado runner for pushes to `main` and manual
+runs; tags `v*` publish them as a release with `SHA256SUMS`.
 
 `make tables` regenerates `rtl/gen/` (NCO ROM, RX gain table) from
 `scripts/gen_tables.py`.

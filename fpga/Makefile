@@ -3,6 +3,7 @@
 #   make tables      regenerate ROM tables (rtl/gen)
 #   make sim         run all simulations (Icarus Verilog) + analysis
 #   make hf / vhf    build bitstreams with Vivado (PATH or local.mk)
+#   make ci          build both on the project's CI runner (scripts/ci-build.sh)
 
 # Host-specific tool paths go in local.mk (not versioned), e.g.
 #   IVERILOG = /opt/iverilog/bin/iverilog
@@ -19,7 +20,7 @@ RTL    := $(wildcard rtl/*.v) rtl/gen/rx_gain_rom.v
 TABLES := rtl/gen/sincos_qw.mem rtl/gen/rx_gain_rom.v
 SIMLIB := sim/models/unisim_models.v sim/axi_mem_slave.v
 
-.PHONY: all tables sim sim-nco sim-core hf vhf clean
+.PHONY: all tables sim sim-nco sim-core hf vhf ci clean
 
 all: sim
 
@@ -49,6 +50,9 @@ sim-core: $(TABLES) | sim/out
 hf vhf: $(TABLES)
 	mkdir -p build
 	$(VIVADO) -mode batch -nojournal -log build/$@.log -source vivado/build.tcl -tclargs $@ $(JOBS)
+
+ci:
+	scripts/ci-build.sh
 
 clean:
 	rm -rf sim/out build .Xil

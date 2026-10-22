@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Weekly check of the Vivado licence on the self-hosted Vivado runner: the
+# run fails from 30 days before expiry, and GitHub mails failed scheduled
+# runs, so the renewal reminder arrives even when nothing is being built.
+# (GitHub disables scheduled workflows after 60 days without repository
+# activity; it mails about that too.)
+name: licence
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vivado-licence:
+    if: vars.SELF_HOSTED_RUNNER == 'true'
+    runs-on: [self-hosted, linux, vivado]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: fpga/scripts
+      - run: fpga/scripts/licence-check.sh --days 30
