@@ -390,6 +390,38 @@ is checked bit for bit against them: the FFT on `packed.hex` →
 `adc.hex` → `packed.hex`, and the whole chain on `adc.hex` → `bins.hex`
 (`make sim-fft sim-split sim-fir sim-chain`).
 
+### 3.7 Outputs: bin selector, power line, DMA (2026-10-28)
+
+`rtl/fft/pfb_top.v` puts the chain's bins (one per clock, k = 0..2047)
+into two DDR rings, each through an `axi_ring_writer` (AXI3, 64-bit,
+16-beat bursts, ring of 128-byte bursts, `ptr` = bursts done). Frames
+start with a header word, which the writer takes as a frame's start
+(its `VARLEN` mode): a frame is accepted whole or dropped whole, by
+the room for the longest one.
+
+| stream | words |
+|---|---|
+| bins (`pfb_select.v`) | header `{0x5042, 1, gen[3:0], 0[7:0], frame[31:0]}`, then each selected bin `{Q[31:0], I[31:0]}` (I low, as RX samples; a full-scale sine reads 2^29: the 25-bit bin << 5) |
+| power (`pfb_power.v`) | per line, 16 chunks: header `{0x5042, 2, chunk[3:0], 0[7:0], line[31:0]}`, then 64 words `{f32[2j+1], f32[2j]}` (128 bins, the even one low) |
+
+* **Selection**: a 2048-bit mask in two banks of LUT RAM (64 × 32 bits).
+  Software writes the bank not in use, then a new `gen`; the next frame
+  switches banks and carries that gen in its header, so software knows
+  which mask a frame used. At most NSEL = 64 bins a frame (the lowest set;
+  more sets `truncated`): 64 bins are 31 MB/s. Bin 2047 can't be
+  selected: bins go out a clock after they come, and its slot is the next
+  frame's header (it is the band edge below Nyquist anyway).
+* **Power**: |X|² exact, summed per bin over `frames` frames (one line:
+  60 000 / frames lines a second, e.g. 3000 for 20) in a 2048 × 64-bit
+  RAM (read, add, write back; the line's first frame starts from zero,
+  its last sends the sums out). Each sum goes out as an IEEE float32
+  with the mantissa truncated (`pfbfx::power_f32`), so software reads
+  floats directly and the model stays bit-exact. A line is 33 KB.
+* **Tests**: `make sim-out` (the two blocks on `bins.hex`: masks
+  switched between frames, truncation, every word; the power line
+  against `power.hex`) and `make sim-top` (ADC samples to both rings in
+  AXI memory models with random backpressure, read back and compared).
+
 ## 4. Server side
 
 * New backend next to the stock-driver one: the `Radio` trait gains (or
@@ -465,6 +497,9 @@ is checked bit for bit against them: the FFT on `packed.hex` →
      with the 0.4 ns guardband; BRAM 51.5 of 60, LUT 7764 (44 %). The
      channelizer datapath is ready for a test build with the register
      file and DMA around it.
+   * Outputs (§3.7): bin selector, power line, two ring writers
+     (`pfb_top.v`); `make sim-out`, `make sim-top` (ADC to DDR) pass.
+     The out-of-context run now synthesises `pfb_top`.
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air

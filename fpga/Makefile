@@ -29,7 +29,7 @@ tables: $(TABLES)
 $(TABLES): scripts/gen_tables.py
 	$(PYTHON) scripts/gen_tables.py
 
-sim: sim-nco sim-core sim-fft sim-split sim-fir sim-chain
+sim: sim-nco sim-core sim-fft sim-split sim-fir sim-chain sim-out sim-top
 
 sim/out:
 	mkdir -p $@
@@ -60,6 +60,17 @@ sim-chain: | sim/out
 	$(IVERILOG) -g2012 -Wall -o sim/out/tb_chain.vvp sim/tb_chain.v $(PFB_RTL)
 	cd sim && $(VVP) -n out/tb_chain.vvp | tee out/tb_chain.log
 	grep -q "tb_chain: PASSED" sim/out/tb_chain.log
+
+sim-out: | sim/out
+	$(IVERILOG) -g2012 -Wall -o sim/out/tb_out.vvp sim/tb_out.v rtl/fft/pfb_select.v rtl/fft/pfb_power.v
+	cd sim && $(VVP) -n out/tb_out.vvp | tee out/tb_out.log
+	grep -q "tb_out: PASSED" sim/out/tb_out.log
+
+sim-top: | sim/out
+	$(IVERILOG) -g2012 -Wall -o sim/out/tb_top.vvp sim/tb_top.v sim/axi_mem_slave.v $(PFB_RTL) \
+	  rtl/fft/pfb_select.v rtl/fft/pfb_power.v rtl/fft/pfb_top.v rtl/axi_ring_writer.v rtl/sync_fifo.v
+	cd sim && $(VVP) -n out/tb_top.vvp | tee out/tb_top.log
+	grep -q "tb_top: PASSED" sim/out/tb_top.log
 
 sim-core: $(TABLES) | sim/out
 	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_core.vvp sim/tb_core.v $(SIMLIB) $(RTL)

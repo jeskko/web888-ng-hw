@@ -20,6 +20,9 @@
 // ring therefore never loses frame alignment (the stock format has no sync
 // markers, so a single dropped word would shift every later frame).
 // The producer must deliver whole frames, starting after `running` rises.
+// VARLEN != 0: frames of varying length, each starting where `s_first` is
+// set with its first word; FRAME is then the longest, the room checked at
+// a start (shorter frames just leave more).
 //
 // Diagnostics (cleared on the next start): `frames` accepted, `drops`
 // dropped frames, `bursts` completed bursts (not wrapped), `bresp_err`
@@ -29,7 +32,8 @@ module axi_ring_writer #(
   parameter integer FIFO_AW = 10,
   parameter integer FRAME   = 1,     // words per frame (<= 2^FIFO_AW)
   parameter integer MAX_OUT = 8,
-  parameter integer ID_W    = 6
+  parameter integer ID_W    = 6,
+  parameter integer VARLEN  = 0
 ) (
   input  wire            clk,
   input  wire            rst,
@@ -50,6 +54,7 @@ module axi_ring_writer #(
 
   input  wire [63:0]     s_data,
   input  wire            s_valid,
+  input  wire            s_first,     // VARLEN: a frame's first word
 
   // AXI3 write channels
   output wire [ID_W-1:0] m_axi_awid,
@@ -143,7 +148,7 @@ module axi_ring_writer #(
   reg  [FW-1:0] fword;          // word index within the current frame
   reg           fkeep;          // current frame accepted
   wire          in_word  = s_valid && running;
-  wire          fstart   = (fword == 0);
+  wire          fstart   = (VARLEN != 0) ? s_first : (fword == 0);
   // Registered for timing: a one-cycle-old count is short by at most the one
   // word written last cycle, hence the +1 (pops only add room).
   reg           room;
@@ -231,7 +236,7 @@ module axi_ring_writer #(
       if (in_word) begin
         if (fstart) fkeep <= room;
         fword <= flast ? {FW{1'b0}} : fword + 1'b1;
-        if (flast) begin
+        if ((VARLEN != 0) ? fstart : flast) begin
           if (admit) frames <= frames + 1'b1;
           else       drops  <= drops + 1'b1;
         end
