@@ -169,6 +169,16 @@ mode (`websdr_vhf.bit`, 13 RX):
 
 ## 3. Open bitstream
 
+**Status (2026-10-28), from the run-time loads on the production unit
+(§0.1):** item 1: signature read, and the DNA check holds (the data
+didn't stop after ten minutes; the unit's stock boot had passed the
+check). Item 2: yes. Item 3: sideband right (FT8 decodes); levels against
+stock not compared. Item 4: zoom levels checked by a user; time-sharing
+with more than two views not tested. Item 7: about an hour, with
+skimmers and web users; the extension status registers not watched yet.
+Still open: the SD-and-reboot path below, items 5 (PPS needs a GPS
+antenna), 6 (VHF), and the rest of 3, 4 and 7.
+
 Copy `fpga/build/hf/websdr_hf.bit` and **reboot**. The stock driver's device
 check is sticky per boot, so a service restart after stock passed would not
 re-check the DNA. Then check, in this order:
@@ -199,7 +209,10 @@ open driver `web888-sdr`, no bitstream loaded at boot), console attached:
    shifters, fabric resets) if available. Then `exec 3</dev/zynqsdr` must
    fail with "No such device" and `dmesg` must show "PL not ready". **The
    board must not hang**: this is the check the emulator can't do. If it
-   hangs, the driver's SLCR test is not enough.
+   hangs, the driver's SLCR test is not enough. (The stock-firmware runs found
+   one such hang already: a PL reset taken from FCLK_RESET0_N, which the
+   PS holds while fclk0 is gated. The bitstream no longer depends on fclk0
+   or that reset; the open driver must not assume either is running.)
 2. `web888d serve --bitstream websdr_hf.bit`: "fpga_manager" in its
    log, then the signature in `dmesg`, then streaming as in section 3.
 3. `driver/test/zsdr-test` (stop web888d first). The emulator-specific
