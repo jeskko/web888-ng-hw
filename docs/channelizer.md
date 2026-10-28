@@ -404,6 +404,11 @@ the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
 3. **Verilog**: polyphase FIR, streaming real FFT, accumulator, bin
    selector, ring DMA; simulated (Icarus/Verilator) against the
    fixed-point vectors; synthesis in CI for resources and timing.
+   * R2²SDF FFT (`fpga/rtl/fft/`, `make sim-fft`): bit-exact to the
+     model on two frames ✓ (2026-10-28). Its twiddle stages still read
+     the whole table; per-stage / quarter-wave ROMs come with synthesis.
+   * next: the split stage, the polyphase FIR, then a synthesis run of
+     the FFT alone for resources and timing
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air

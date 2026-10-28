@@ -1,0 +1,15 @@
+branches M = 4096
+taps T = 11
+fft points n = 2048
+frames = 2
+adc samples = 47104
+coef_bits = 20
+coef_shift = 28
+data_bits = 25
+twiddle_bits = 18
+branch_shift = 11
+stage_shifts = 0b11110001111 (bit s: halve after stage s)
+arch = Radix22
+saturations = 0
+frame f uses adc[f·n .. f·n + M·T]; packed/fft: n lines per frame, bins: n + 1
+complex values: {re, im}, each data_bits (twiddles: twiddle_bits) wide

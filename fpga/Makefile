@@ -20,7 +20,7 @@ RTL    := $(wildcard rtl/*.v) rtl/gen/rx_gain_rom.v
 TABLES := rtl/gen/sincos_qw.mem rtl/gen/rx_gain_rom.v
 SIMLIB := sim/models/unisim_models.v sim/axi_mem_slave.v
 
-.PHONY: all tables sim sim-nco sim-core hf vhf ci clean
+.PHONY: all tables sim sim-nco sim-core sim-fft hf vhf ci clean
 
 all: sim
 
@@ -28,7 +28,7 @@ tables: $(TABLES)
 $(TABLES): scripts/gen_tables.py
 	$(PYTHON) scripts/gen_tables.py
 
-sim: sim-nco sim-core
+sim: sim-nco sim-core sim-fft
 
 sim/out:
 	mkdir -p $@
@@ -37,6 +37,11 @@ sim-nco: $(TABLES) | sim/out
 	$(IVERILOG) -g2012 -Wall -o sim/out/tb_nco.vvp sim/tb_nco.v rtl/nco.v
 	cd sim && $(VVP) -n out/tb_nco.vvp
 	$(PYTHON) sim/analyze.py nco sim/out/nco.txt
+
+sim-fft: | sim/out
+	$(IVERILOG) -g2012 -Wall -o sim/out/tb_fft.vvp sim/tb_fft.v rtl/fft/delay_line.v rtl/fft/r22_bf.v rtl/fft/r22_tw.v rtl/fft/r22sdf_fft.v
+	cd sim && $(VVP) -n out/tb_fft.vvp | tee out/tb_fft.log
+	grep -q "tb_fft: PASSED" sim/out/tb_fft.log
 
 sim-core: $(TABLES) | sim/out
 	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_core.vvp sim/tb_core.v $(SIMLIB) $(RTL)
