@@ -65,7 +65,10 @@ On the production unit, 2026-10-29: chain-loading the stock kernel
 worked (back in about a minute, `chainboot=1` in `/proc/cmdline`, all
 RAM, both CPUs, the stock server), but the watchdog was found stopped
 afterwards (above). With the fix, `wdt set 516` and the dry run read the
-timeout back (CCR 0x356b) and pass the check. Earlier the dry run (watchdog armed, not
+timeout back (CCR 0x356b) and pass the check, and a second chain-load
+(back in about 25 s) found the watchdog running after the jump (ZMR 0x33:
+enabled, reset on timeout, unkicked through the boot); disarmed then with
+`wdt set 516`. Earlier the dry run (watchdog armed, not
 kicked, for 300 s around it) loads, reads the images, frees them; only
 the out-of-tree taint; web888d went on undisturbed. BusyBox `insmod`
 runs a failing init twice (`finit_module`, then `init_module`): harmless
