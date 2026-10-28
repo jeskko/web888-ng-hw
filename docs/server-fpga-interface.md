@@ -18,12 +18,12 @@ Where a statement is **inferred** rather than read directly from code, it is mar
 The server **never touches FPGA registers directly**. It has no `/dev/mem` mmap, no UIO, no udmabuf
 in the production path. All FPGA access goes through one closed kernel driver:
 
-```
-websdr.bin --ioctl()--> /dev/zynqsdr  (driver "rx888,zynqsdr", built into the kernel, source NOT in repo)
-                              |
-                              +--> AXI GP registers / FIFOs in the PL (closed bitstream websdr_{hf,vhf}.bit)
-                              +--> PS MIO GPIOs (attenuator, HF/air mode, clock select)  (inference)
-                              +--> 4 PL->PS interrupts (IRQ_F2P[0..3])
+```mermaid
+flowchart LR
+  srv["websdr.bin"] -- "ioctl()" --> drv["/dev/zynqsdr<br/>driver rx888,zynqsdr, built into the kernel<br/>(source not in the repo)"]
+  drv --> pl["AXI GP registers / FIFOs in the PL<br/>(closed bitstream websdr_hf / websdr_vhf.bit)"]
+  drv --> mio["PS MIO GPIOs: attenuator, HF/air mode,<br/>clock select (inference)"]
+  pl -- "4 PL→PS interrupts<br/>IRQ_F2P[0..3]" --> drv
 ```
 
 That gives two possible ways to build a drop-in open FPGA:
@@ -35,6 +35,11 @@ That gives two possible ways to build a drop-in open FPGA:
 * **B. Replace the driver too (recommended).** Write an open `/dev/zynqsdr` driver that implements the
   ioctl ABI in §2.1 and talks to your own register map. The server needs no changes, and the ioctl ABI
   is fully specified by `zynq/ioctl.h` and `zynq/peri.cpp`.
+
+**Since then (2026-10-28):** both were done. The stock driver was reverse-engineered
+(`docs/stock-driver.md`), and the open bitstream (`fpga/`, release v0.2.0) implements its register
+map: it runs on a stock unit with the stock driver (option A, `docs/hardware-test-plan.md`). An open
+driver (option B, `driver/`) is complete in the emulator but not yet tested on hardware.
 
 ---
 
