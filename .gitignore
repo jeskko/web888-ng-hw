@@ -1,3 +1,4 @@
 /tools/zynqsdr-probe/zynqsdr_probe
 /tools/wdt/wdt
 __pycache__/
+/tools/slcr-peek/slcr_peek

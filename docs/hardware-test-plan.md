@@ -72,8 +72,33 @@ Run on the production unit (2026-10-28, ~10 min, stock bitstream
   there is no fix and no PPS. gpsd connected without a fix.
 * Back to stock: web888d stopped on SIGTERM, sdrd started and reopened the
   device, the watchdog disarmed, no reset.
-* Not done: `bitstream = "auto"` (web888d loading the bitstream itself)
-  on this unit. It reprograms the FPGA, so it needs its own go-ahead.
+* `bitstream = "auto"` (web888d loads the stock `.bit` itself through
+  devcfg; 2026-10-28, with go-ahead): works, 48.1 k frames/s.
+
+**Open bitstream v0.1.0 (`0x0E5D020C`), loaded at run time on the
+production unit (2026-10-28): hard hang, reset by the watchdog both times.**
+Done step by step (`private/m4-test-kit/load-bit.sh steps`, output
+streamed):
+1. `cat websdr_hf.bit > /dev/xdevcfg`: exit 0, the load works.
+2. SLCR afterwards (`tools/slcr-peek`, PS registers only):
+   `FPGA_RST_CTRL = 0` (PL resets released), `LVL_SHFTR_EN = 0xf`,
+   `FPGA0_CLK_CTRL = 0x00400500`.
+3. The first PL register access (`tools/zynqsdr-probe`: open, then
+   `GET_SIGNATURE`) never completed: the board hung, and the watchdog reset
+   it about 30 s later. It came back on stock by itself.
+
+So the bitstream configures, but nothing answers on M_AXI_GP0.
+`axi_regs.v` answers every address and handles bursts, so the likely
+reason is that its clock isn't running (the ADC-clock PLL in `clk_gen.v`
+drives `M_AXI_GP0_ACLK`, and the bus reset is synchronised on it), or its
+reset stays asserted. The vendor design clocks GP0 from the same kind of
+PLL, but takes no reset from the PS (`proc_sys_reset` with a constant
+`ext_reset_in`). Next, without any AXI access: put `pll_locked`, a
+divided-down heartbeat of the PLL clock and the bus-reset state on EMIO
+GPIO inputs, and read them from the PS GPIO controller (`0xE000A068`,
+DATA_RO bank 2) through /dev/mem. That read is PS-side and safe even when
+the PL's AXI is dead. Longer term: clock GP0 from a PS clock (FCLK) with a
+CDC into the ADC domain, so a missing ADC clock can never hang the bus.
 
 ## 1. Prepare a stock SD card
 
