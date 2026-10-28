@@ -1,6 +1,7 @@
 # Channelizer bitstream (design note)
 
-Status: **proposal, software model in progress** (2026-10-23). This
+Status: **in progress** (2026-10-28): software model done, FFT
+architecture chosen (§3.6), Verilog next. This
 would be the core of the open-FPGA milestone (server design §11, M6).
 It drops compatibility with the stock server's FPGA interface. The
 stock bitstream stays usable as a fallback with its own backend.
@@ -313,6 +314,64 @@ same time on one unit.
 * ka9q-radio: unclear whether it takes network I/Q as its front end;
   to check.
 
+### 3.6 FFT architecture: radix-2² SDF (chosen 2026-10-28)
+
+The bank delivers one frame of 4096 real branch sums every D = 2048
+samples, so at the ADC clock (122.88 MHz) the FFT has to take **one
+complex point per clock without pause**: the 4096 real sums packed as
+2048 complex values (even branch + j·odd branch), then a split stage
+into the 2049 bins. A single-path delay-feedback (SDF) pipeline does
+exactly that. Radix-2² (He and Torkelson) keeps radix-2's simple
+butterflies but needs a non-trivial complex multiplier only after every
+second stage.
+
+```mermaid
+flowchart LR
+  pfb["polyphase FIR<br/>2 branch sums / clock<br/>2T DSP"] --> pk["pack<br/>even + j·odd"]
+  pk --> pairs["5 stage pairs<br/>BF2I + BF2II, then ×W<br/>L = 2048, 512, 128, 32, 8"]
+  pairs --> b11["BF2<br/>L = 2"]
+  b11 --> sp["reorder + split<br/>pairs k, n − k"]
+  sp --> out["2049 bins<br/>selector, |X|²"]
+```
+
+* **2048 points = 5 radix-2² stage pairs + one radix-2 stage.** Each
+  pair: BF2I (x0 ± x2, x1 ± x3), BF2II (the same with a trivial −j on
+  one difference), then one twiddle multiply, W_L^{0, 2r, r, 3r} for the
+  four outputs (bypassed where the twiddle is 1, which 18-bit twiddles
+  can't hold exactly). The last stage (L = 2) has no twiddle.
+* **Multipliers:** 5 complex multiplies of 25 × 18 bits, 3 DSP48 each:
+  **15 DSP**, against about 30 for radix-2 SDF (10 non-trivial
+  multipliers). The split stage needs one more (3 DSP).
+* **Delay lines:** 1024 + 512 + … + 1 = 2047 complex words of 2 × 25
+  bits in total: the long ones (1024, 512, 256) in BRAM (about 3 BRAM36),
+  the rest in SRL/LUT RAM. Twiddles: a quarter-wave table (512 entries
+  of 2 × 18 bits) serves every multiplier by symmetry (about 1 BRAM36).
+* **Output order:** bit-reversed. The split stage needs X[k] and
+  X[n − k] together anyway, so one frame buffer (2048 × 50 bits,
+  double-buffered: about 6 BRAM36) does the reorder and the pairing. The
+  bin selector and the power accumulator then see natural order.
+* **Rounding** (the fixed-point model's `FftArch::Radix22`, which is
+  the bit-exact reference): every butterfly output gets the stage's
+  rounded halving if it has one (stages 1–4 and 8–11), then saturates;
+  each twiddle product is rounded once (round half up: add 2^16, shift
+  by 17). At the chosen widths the error is 22.8 dB below the ADC noise
+  for a −1 dBFS tone and 29.6 dB for eight tones (radix-2: 23.8 / 28.3),
+  with no saturation: the same floor, +0.02 dB.
+* **Polyphase FIR:** 4096 branch sums per 2048 samples is two per clock,
+  each T taps: 2T multiply-accumulates per clock (**22 DSP** at T = 11,
+  24 at T = 12). The history is T banks of 4096 × 16 bit, each read
+  twice per clock (both BRAM ports), written once per clock in turn.
+* **Not Xilinx FFT IP:** the design stays our own GPL RTL, simulated
+  with Icarus against the model, like the rest of `fpga/`.
+
+**Test vectors:** `cargo run --release -p web888-dsp --example
+pfbvectors -- DIR [FRAMES]` (server repo) writes `$readmemh` files from
+the model: the ADC input, coefficients, twiddles, and per frame the
+FFT input, its bit-reversed output and the bins. Each Verilog block is
+checked bit for bit against them: the FFT on `packed.hex` → `fft.hex`,
+the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
+`adc.hex` + `coefs.hex` → `packed.hex`, and the whole chain.
+
 ## 4. Server side
 
 * New backend next to the stock-driver one: the `Radio` trait gains (or
@@ -339,8 +398,9 @@ same time on one unit.
      against the current tuned chain
    * A9 bench of the fine stage per user
 2. **Fixed-point model**: word lengths chosen (§3.2,
-   `crates/dsp/src/pfbfx.rs`). Bit-exact reference vectors follow once
-   the Verilog FFT architecture is fixed.
+   `crates/dsp/src/pfbfx.rs`). FFT architecture chosen: radix-2² SDF
+   (§3.6), modelled bit-exact; reference vectors from
+   `examples/pfbvectors.rs` ✓ (2026-10-28).
 3. **Verilog**: polyphase FIR, streaming real FFT, accumulator, bin
    selector, ring DMA; simulated (Icarus/Verilator) against the
    fixed-point vectors; synthesis in CI for resources and timing.
