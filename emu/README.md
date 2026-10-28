@@ -11,7 +11,7 @@ the model.
 Vendor binaries (kernel, initramfs, DTB, SD image) are extracted locally
 from the release zip and never committed.
 
-## Status (2026-10-21)
+## Status (2026-10-28)
 
 | milestone | state |
 |---|---|
@@ -19,6 +19,8 @@ from the release zip and never committed.
 | B. stock kernel boots to a shell | done |
 | C. `zynqsdr` probes; signature and "Genuine" check with a matching MAC/DNA pair | done |
 | D. stock server streams, web UI on forwarded port 8073 | done (`tests/kiwi-check.py`: AM audio tone, waterfall carriers) |
+| E. web888d on the stock kernel and driver | done (2026-10-28, before its first run on a unit: RX at 48 kS/s, waterfalls, clean release of the device; found the musl `sched_setscheduler` stub) |
+| F. the open driver (`../driver/`) with the Yocto 6.18 kernel and the web888-ng-os image | done: web888d serves HPSDR through it, `driver/test/zsdr-test` passes |
 
 ## Files
 
@@ -59,6 +61,11 @@ MAC), or put `MAC=` and `DNA=` in `local.conf` (not versioned).
   tests are fine; CPU load and throughput numbers say nothing about the
   real board. A kernel without SW PAN would be faster here, but that is a
   security feature of the real image.
+* **The PL model always answers on the bus**, and its clocks and resets
+  are ideal. It could not show the hang the first open bitstream caused
+  on a real board (a PL reset held by gated fclk0,
+  `../docs/hardware-test-plan.md`): bus, clock and reset behaviour need
+  the hardware.
 * `--kernel FILE` boots another kernel (e.g. the Yocto 6.18 kernel) with
   the vendor userspace. It has no stock `zynqsdr` driver, so the open
   driver (`../driver/`) can be loaded with `insmod`.

@@ -9,7 +9,9 @@ need to match.
 
 - Kernel `6.6.110-xilinx` (built 2025-10-18), Alpine 3.20 diskless (tmpfs
   root, `lbu` apkovl, modloop). The SD card (FAT) is mounted read-only at
-  `/media/mmcblk0p1`.
+  `/media/mmcblk0p1`, but the stock server remounts it read-write when it
+  saves its configuration (check `mount` and `sync` before anything that
+  may reset the board).
 - The bitstreams on the card are byte-identical to those in the
   `web-888-alpine-3.20-armv7-20260919` release (sha256 HF `cacb1968…c0b3d6`,
   VHF `298415f0…7513e`).
@@ -35,6 +37,25 @@ need to match.
   STS 0x0C, high at 0x10) as the stock driver uses it.
 - No PL interrupts are registered (the IRQ_F2P lines are unused). CMA is
   16 MiB at 0x1f000000.
+
+## Clocks, resets, watchdog (2026-10-28)
+
+What a bitstream loaded on this firmware finds (read from the PS side:
+`tools/slcr-peek`, devcfg sysfs, `tools/wdt`):
+
+- **fclk0 is gated.** devcfg's `fclk/fclk0` (after `fclk_export`) reads
+  `enable` 0, rate 50 MHz; the vendor bitstream doesn't use it, and the
+  kernel leaves it off. SLCR: `FPGA0_CLK_CTRL` 0x00400500,
+  `FPGA_RST_CTRL` 0, `LVL_SHFTR_EN` 0xf.
+- **FCLK_RESET0_N stays asserted while fclk0 is gated**, although
+  `FPGA_RST_CTRL` reads 0. A PL reset taken from it never releases: that
+  hung the board with the open bitstream v0.1.0. Enabling fclk0
+  (`echo 1 > .../fclk/fclk0/enable`) released it at once. So the PL must
+  run on its own clock (the ADC clock) and reset, as the vendor design
+  does.
+- Watchdog: `cdns_wdt` with `reset-on-timeout` (a timeout resets the
+  board), `nowayout=0`, 10 s default timeout; nothing arms it on the stock
+  firmware. Kernel `panic=120`, `panic_on_oops=0`.
 
 ## Device tree (live)
 
