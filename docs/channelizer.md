@@ -507,6 +507,8 @@ the room for the longest one.
      power line's tests come from registers computed during the frame
      before, and each tap's bank is a register stepped with the block
      (`base`, the second half one less). Still bit-exact.
+   * Second `pfb_top` run (3b66e52): **timing met, WNS +0.073 ns**; BRAM
+     51.5 of 60, LUT 12 846 (73 %), DSP 56 of 80.
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air

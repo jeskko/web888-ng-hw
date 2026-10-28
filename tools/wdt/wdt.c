@@ -98,15 +98,25 @@ static void sleep_s(long s)
   sys3(SYS_nanosleep, (long)ts, 0, 0);
 }
 
+// opening starts the timer: a failure after the open disarms first, or
+// the board resets at the old timeout
+static void die_open(long fd, const char *what, long r)
+{
+  sys3(SYS_write, fd, (long)"V", 1);
+  sys3(SYS_close, fd, 0, 0);
+  out("disarmed\n");
+  die(what, r);
+}
+
 static long arm(long timeout)
 {
   long fd = sys3(SYS_open, (long)"/dev/watchdog", O_WRONLY, 0);
   if (fd < 0) die("open /dev/watchdog", fd);
   int t = timeout;
   long r = sys3(SYS_ioctl, fd, WDIOC_SETTIMEOUT, (long)&t);
-  if (r < 0) die("WDIOC_SETTIMEOUT", r);
+  if (r < 0) die_open(fd, "WDIOC_SETTIMEOUT", r);
   r = sys3(SYS_ioctl, fd, WDIOC_GETTIMEOUT, (long)&t);
-  if (r < 0) die("WDIOC_GETTIMEOUT", r);
+  if (r < 0) die_open(fd, "WDIOC_GETTIMEOUT", r);
   out("armed, timeout ");
   num(t);
   out(" s\n");
