@@ -18,11 +18,11 @@ official firmware image `web-888-alpine-3.20-armv7-20260919.zip`.
 
 - DDR: 512 MB (`memory@0 reg = <0 0x20000000>`).
 - Standard `xlnx,zynq-devcfg-1.0` + `fpga-region`/`fpga-mgr` → bitstream loadable at runtime.
-- No PL nodes in DTB → server presumably uses `/dev/mem` (see `server-fpga-interface.md`).
+- No PL nodes in DTB: the closed `zynqsdr` driver (built into the kernel) has the PL addresses hard-coded, and the server only talks to it through ioctls (`server-fpga-interface.md`, `stock-driver.md`).
 - PS config: Red Pitaya `cfg/red_pitaya.xml` with SPI0/1 off, SD CD off. DDR part param MT41J256M16 (Red Pitaya default).
 - FSBL hook (`patches/red_pitaya_fsbl_hooks.c`) programs Si5351 @0x60 over i2c0 (CLK0 = ADC+FPGA clock, CLK2 = ext clock out); EEPROM @0x50.
 - Pinout: matches `cfg/ports.xdc` on red-pitaya-notes `web888` branch (ADC D[15:0], OVF P20, clk U18/U19 diff, PPS K18, antenna_o[5:0], PGA K14, DITH J15, LED F16).
-  - NOTE: XDC uses LVCMOS18 / DIFF_HSTL_I_18 for ADC bank; website says "all pins 3.3V CMOS". Must be checked against hardware (bank VCCO) before committing.
+  - The XDC uses LVCMOS18 / DIFF_HSTL_I_18 for the ADC bank, though the website says "all pins 3.3V CMOS". The open bitstream (`../fpga/constraints/web888.xdc`) uses the same and receives correctly on a stock unit (2026-10-28), so the ADC bank is 1.8 V; the other outputs (PGA, DITH, PPS, antenna, LED) are LVCMOS33.
 
 ## Top-level block design (fpga_overall.png)
 
