@@ -1,0 +1,2 @@
+obj-m := chainboot.o
+chainboot-y := main.o reloc.o

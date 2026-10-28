@@ -160,8 +160,9 @@ never touched.
    through the driver, then left unkicked; about 8 min), reset on
    expiry.
 2. A small kernel module for the stock 6.6.110-xilinx kernel (kexec's
-   job without kexec): CPU1 offlined first, our zImage, DTB and initramfs
-   in a CMA buffer, caches flushed, MMU off, jump.
+   job without kexec, `tools/chainboot`): CPU1 offlined first, our
+   zImage, DTB and initramfs in pages outside their destinations, devices
+   shut down as for a reboot, `soft_restart` into a relocation stub.
 3. Our image keeps the watchdog running (`cdns_wdt` built in,
    `clk_ignore_unused` so its clock isn't gated) and starts kicking it only
    when web888d streams **and** someone confirms over the network within
@@ -179,9 +180,9 @@ What the safety net rests on, and how to check it before the first try:
 | assumption | check |
 |---|---|
 | a SWDT timeout resets this board and it comes back on stock | **shown** (2026-10-28, `hardware-test-plan.md` §0): `wdt hang 30` and two real AXI hangs, back on stock in about 25 s each time |
-| it can be armed for several minutes, with nothing kicking it, through a jump | `wdt hang` arms it through the driver and leaves it unkicked; the stock driver has no shutdown hook, so nothing stops it. The longest timeout the driver takes (516 s expected): set it, read it back, disarm with the magic close (no reset) |
+| it can be armed for several minutes, with nothing kicking it, through a jump | `wdt hang` arms it through the driver and leaves it unkicked; the stock driver has no shutdown hook, so nothing stops it. **516 s accepted** and read back on the unit, disarmed cleanly (2026-10-29) |
 | the new kernel doesn't stop or ungate the SWDT before our userspace runs | `cdns_wdt` source; the module's dry run (below) shows the timer still counting after the jump |
-| the module works on the stock kernel (no headers or config shipped: built against linux-xlnx 6.6.110 with a matching config; vermagic from the stock modules) | QEMU with the stock kernel, DTB and initrd from `boot.bin`; then on the unit, a dry run chain-loading the **stock** kernel itself (failure: watchdog reset to stock) |
+| the module works on the stock kernel | **in the emulator** (`tools/chainboot`, 2026-10-29): built against mainline 6.6.110 + the vendor's public patch and defconfig, with the stock modules' CRCs; on the unit's own `boot.bin` the dry run loads and frees cleanly, and `go` boots the stock kernel again (all RAM, both CPUs, initramfs, the stock server streaming). On the unit: a dry run, then chain-loading the **stock** kernel itself (failure: watchdog reset to stock) |
 | our image mounts the FAT read-only | image config, checked in the emulator |
 
 What would still need hands on site: a hardware state that survives a
