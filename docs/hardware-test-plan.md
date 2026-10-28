@@ -36,6 +36,45 @@ load test bitstreams at run time (`web888d serve --bitstream PATH`, with
 rebooting. The stock driver's device check has then already passed for
 this boot.
 
+### 0.1 web888d on a stock unit
+
+First in the emulator (`emu/`: stock kernel and driver against the
+`web888-pl` model; done 2026-10-28). web888d opened `/dev/zynqsdr`, read
+the signature (12 RX, 2 WF at 122.88 MHz) and streamed RX at 48 kS/s with
+waterfalls. It exited on SIGTERM, the driver released the device, and
+stock sdrd started again. It also found a bug: musl's
+`sched_setscheduler()` is an ENOSYS stub (the skimmers now use the raw
+syscall). The emulator's CPU numbers are meaningless (slow syscalls).
+
+On the unit, everything goes to `/tmp/w888` (tmpfs): web888d (CI artifact
+`web888d-armv7-musl`), `ui/`, `wdt`, a config and a start/stop script:
+* the watchdog first (`wdt keep 30 0`, nice -5), then `rc-service sdrd
+  stop`, then web888d;
+* `bitstream = "none"`: the stock bitstream that sdrd loaded stays, and
+  nothing is reprogrammed;
+* web on `127.0.0.1:18073` only (ssh tunnel; the public front end
+  forwards to 8073), HPSDR off, no `[report]` (nothing uploaded);
+* stop: SIGTERM to web888d, `rc-service sdrd start`, `touch
+  /tmp/wdt.stop` (disarms within a kick interval).
+
+Run on the production unit (2026-10-28, ~10 min, stock bitstream
+`0xAA55020C`):
+* web888d opened the stock driver: 12 RX, 2 WF, 122.88 MHz. RX at 48.0 k
+  frames/s with `hw_rate_ok`, no driver messages beyond open and
+  release, RSS 18 MB.
+* Receiver page (relayed with `socat` + `ssh ... nc`, since the unit's
+  sshd allows no port forwarding): audio with 0 underruns and 0 drops, the
+  0-61 MHz waterfall, a zoomed waterfall, click-tune, FT8 labels.
+* FT8 on 40/30/20 m: ~90 decodes per slot (261/144/333 in 7 slots).
+  The decoders (now `SCHED_IDLE`, policy 5) use ~4.5 s of CPU per band
+  and slot, as the bench said. DSP threads ~8 %, RX reader ~9 % of a core.
+* No PPS correction (`clock_ppm 0`): the unit's GPS has no antenna, so
+  there is no fix and no PPS. gpsd connected without a fix.
+* Back to stock: web888d stopped on SIGTERM, sdrd started and reopened the
+  device, the watchdog disarmed, no reset.
+* Not done: `bitstream = "auto"` (web888d loading the bitstream itself)
+  on this unit. It reprograms the FPGA, so it needs its own go-ahead.
+
 ## 1. Prepare a stock SD card
 
 The unit ships without one. Follow the vendor guide
