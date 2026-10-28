@@ -100,6 +100,33 @@ DATA_RO bank 2) through /dev/mem. That read is PS-side and safe even when
 the PL's AXI is dead. Longer term: clock GP0 from a PS clock (FCLK) with a
 CDC into the ADC domain, so a missing ADC clock can never hang the bus.
 
+**Diagnosis (hw 9ddaf65, liveness bits on EMIO; `load-bit.sh diag`,
+2026-10-28): the bus reset never releases, because fclk0 is off.** After
+the load, with no PL access at all:
+
+| bit        | read | meaning                                        |
+|------------|------|------------------------------------------------|
+| pll_locked | 1    | the ADC-clock PLL locks                        |
+| clk_hb     | toggles | the PLL clock (GP0 clock) runs              |
+| adc_hb     | toggles | the raw ADC clock runs                      |
+| fclk_hb    | 0    | FCLK_CLK0 does not run                         |
+| ps_resetn  | 0    | FCLK_RESET0_N stays asserted                   |
+| bus_rst    | 1    | so the register file and AXI slave stay in reset |
+
+`FPGA_RST_CTRL` reads 0 all the same: the PS holds FCLK_RESET0_N while
+fclk0 is gated. The stock kernel leaves fclk0 disabled (devcfg sysfs:
+`fclk_export` then `fclk/fclk0/enable` reads 0, rate 50 MHz); the vendor
+bitstream doesn't use it. Writing 1 to `enable` started `fclk_hb`, took
+`ps_resetn` to 1 and `bus_rst` to 0 at once. Put back afterwards (0,
+`fclk_unexport`, sdrd restarted).
+
+So an AXI slave held in reset never raises READY, and the first register
+read waits for ever. Fix: the bitstream must not depend on fclk0 or
+FCLK_RESET0_N. Take the bus reset from a power-on counter in the PL
+(clocked by the PLL clock, like the vendor's constant `ext_reset_in`),
+and drop the FCLK idea above: a PS clock is only there if the loader
+enables it.
+
 ## 1. Prepare a stock SD card
 
 The unit ships without one. Follow the vendor guide
