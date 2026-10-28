@@ -424,8 +424,11 @@ the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
      40 bits takes 3 BRAM36), split buffer ~6, FFT delay lines ~4,
      twiddles ~3: ~54 of 60, before the register file and DMA FIFOs.
      Tight; T = 10 (90 dB) saves 5.
-   * next: `make pfb` on CI (out of context) for the real resources and
-     timing
+   * First CI run of `make pfb` (out of context, 29c725c): LUT 8440
+     (48 %), registers 2551 (7 %), **BRAM 51.5 of 60 (86 %)**; timing
+     **WNS −10.07 ns**: the FIR summed its 11 products in one clock (a
+     16.2 ns chain of 8 DSPs). Now a registered pairwise tree (4 levels),
+     still bit-exact; rerun pending.
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air

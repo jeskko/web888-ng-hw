@@ -25,8 +25,8 @@
 // with its halves swapped.
 //
 // `out_valid` once 2T half-blocks have been filled; `out_odd` is the
-// frame's parity (the model's frame count). Latency: 6 clocks after the
-// frame's last sample to its first output.
+// frame's parity (the model's frame count). Latency: 5 + log2(T) clocks
+// after the frame's last sample to its first output.
 
 module pfb_fir #(
   parameter integer WI   = 16,
@@ -167,32 +167,47 @@ module pfb_fir #(
       odd2 <= odd1;
     end
 
-  // stage 3: products; stage 4: sums (exact)
+  // stage 3: products; then the sums (exact) in a pairwise tree of LV
+  // registered levels (one adder per level and clock: 11 taps, 4 levels)
   localparam integer PW = WI + CB;
   localparam integer AW = PW + $clog2(T) + 1;
-  reg signed [PW-1:0] pe [0:T-1];
-  reg signed [PW-1:0] po [0:T-1];
-  reg signed [AW-1:0] ae = 0, ao = 0;
-  reg [LD-1:0] k3 = 0, k4 = 0;
-  reg          v3 = 1'b0, v4 = 1'b0, odd3 = 1'b0, odd4 = 1'b0;
-  reg signed [AW-1:0] se, so;
+  localparam integer LV = $clog2(T);
+  reg signed [AW-1:0] te [0:(LV+1)*T-1];   // level l, term j at l*T + j
+  reg signed [AW-1:0] to [0:(LV+1)*T-1];
+  reg [LD-1:0] kd [0:LV];
+  reg          vd [0:LV];
+  reg          od [0:LV];
+  integer l, c;
+  initial
+    for (l = 0; l <= LV; l = l + 1) begin
+      kd[l] = 0; vd[l] = 1'b0; od[l] = 1'b0;
+      for (i = 0; i < T; i = i + 1) begin te[l*T + i] = 0; to[l*T + i] = 0; end
+    end
   always @(posedge clk)
     if (ce) begin
       for (i = 0; i < T; i = i + 1) begin
-        pe[i] <= xe[i] * ce_[i];
-        po[i] <= xo[i] * co_[i];
+        te[i] <= xe[i] * ce_[i];
+        to[i] <= xo[i] * co_[i];
       end
-      k3 <= k2; v3 <= v2; odd3 <= odd2;
-      se = 0;
-      so = 0;
-      for (i = 0; i < T; i = i + 1) begin
-        se = se + pe[i];
-        so = so + po[i];
+      kd[0] <= k2; vd[0] <= v2; od[0] <= odd2;
+      c = T;
+      for (l = 0; l < LV; l = l + 1) begin
+        for (i = 0; i < T; i = i + 1)
+          if (2 * i + 1 < c) begin
+            te[(l+1)*T + i] <= te[l*T + 2*i] + te[l*T + 2*i + 1];
+            to[(l+1)*T + i] <= to[l*T + 2*i] + to[l*T + 2*i + 1];
+          end else if (2 * i < c) begin
+            te[(l+1)*T + i] <= te[l*T + 2*i];
+            to[(l+1)*T + i] <= to[l*T + 2*i];
+          end
+        c = (c + 1) / 2;
+        kd[l+1] <= kd[l]; vd[l+1] <= vd[l]; od[l+1] <= od[l];
       end
-      ae <= se;
-      ao <= so;
-      k4 <= k3; v4 <= v3; odd4 <= odd3;
     end
+  wire signed [AW-1:0] ae = te[LV*T];
+  wire signed [AW-1:0] ao = to[LV*T];
+  wire [LD-1:0] k4 = kd[LV];
+  wire v4 = vd[LV], odd4 = od[LV];
 
   // stage 5: round down by BSH bits (half up), saturate to W
   function signed [W-1:0] fit;
