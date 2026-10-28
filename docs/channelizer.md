@@ -407,8 +407,11 @@ the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
    * R2²SDF FFT (`fpga/rtl/fft/`, `make sim-fft`): bit-exact to the
      model on two frames ✓ (2026-10-28). Its twiddle stages still read
      the whole table; per-stage / quarter-wave ROMs come with synthesis.
-   * next: the split stage, the polyphase FIR, then a synthesis run of
-     the FFT alone for resources and timing
+   * Split stage (`pfb_split.v`, `make sim-split`): bit-exact ✓. It
+     drops bin N (Nyquist: real, half of it above fs/2), so a frame of
+     2048 clocks gives exactly 2048 bins, one per clock.
+   * next: the polyphase FIR, then a synthesis run for resources and
+     timing
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air
