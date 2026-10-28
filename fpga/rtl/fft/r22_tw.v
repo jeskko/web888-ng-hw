@@ -9,9 +9,9 @@
 // unchanged (18-bit twiddles can't hold 1); otherwise
 // (a · w) rounded by TB - 1 bits (round half up), saturated to W.
 //
-// First version, for bit-exact simulation: the whole N-entry table
-// (`TW_FILE`, {re, im} TB bits each, from web888-dsp
-// `examples/pfbvectors.rs`). Two cycles of latency.
+// The stage's own table: W_L^e for e < 3L/4 (`TW_FILE`, {re, im} TB bits
+// each; rtl/gen/pfb_tw_<pair>.mem from web888-dsp examples/pfbvectors.rs).
+// Two cycles of latency.
 
 module r22_tw #(
   parameter integer W    = 25,
@@ -30,11 +30,10 @@ module r22_tw #(
   output reg  [LOGN-1:0]      out_idx = 0
 );
 
-  localparam integer N  = 1 << LOGN;
   localparam integer LQ = $clog2(L / 4);
-  localparam integer SH = LOGN - $clog2(L);  // e·N/L = e << SH
+  localparam integer NT = 3 * L / 4;
 
-  reg [2*TB-1:0] tw [0:N-1];
+  reg [2*TB-1:0] tw [0:NT-1];
   initial $readmemh(TW_FILE, tw);
 
   // the exponent from the position in the block
@@ -44,7 +43,6 @@ module r22_tw #(
                     (p == 2'd1) ? {1'b0, r, 1'b0} :
                     (p == 2'd2) ? {2'b00, r} :
                                   ({2'b00, r} + {1'b0, r, 1'b0});
-  wire [LOGN-1:0] k = e << SH;
 
   // stage 1: the sample and its twiddle
   reg signed [W-1:0]  a_re = 0, a_im = 0;
@@ -55,9 +53,9 @@ module r22_tw #(
     if (ce) begin
       a_re <= in_re;
       a_im <= in_im;
-      w_re <= tw[k][2*TB-1:TB];
-      w_im <= tw[k][TB-1:0];
-      pass <= (k == {LOGN{1'b0}});
+      w_re <= tw[e][2*TB-1:TB];
+      w_im <= tw[e][TB-1:0];
+      pass <= (e == {(LQ+2){1'b0}});
       idx1 <= in_idx;
     end
 

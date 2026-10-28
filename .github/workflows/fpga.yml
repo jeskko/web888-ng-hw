@@ -70,6 +70,19 @@ jobs:
           name: bitstreams
           path: out/
           if-no-files-found: error
+      - name: channelizer (out of context)
+        # resources and timing of rtl/fft alone; reported, not gating
+        continue-on-error: true
+        run: |
+          make -C fpga pfb VIVADO="$VIVADO" JOBS=8
+          wns=$(sed -n 's/^WNS: \([-0-9.]*\) ns.*/\1/p' fpga/build/pfb.log | tail -n 1)
+          echo "channelizer (out of context): WNS $wns ns" | tee -a "$GITHUB_STEP_SUMMARY"
+          mkdir pfb && cp fpga/build/pfb/*.txt pfb/ && echo "WNS $wns ns" > pfb/wns.txt
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: channelizer-reports
+          path: pfb/
 
   # Tags: publish the bitstreams as release assets (web888-ng-os fetches
   # them from there by checksum).

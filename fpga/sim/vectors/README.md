@@ -8,8 +8,8 @@ cargo run --release -p web888-dsp --example pfbvectors -- DIR 2
 ```
 
 `meta.txt` lists the sizes and widths. Kept here, for two frames:
-`packed.hex` (the FFT input), `fft.hex` (its bit-reversed output),
-`bins.hex` (the split stage's N + 1 bins a frame), and the twiddles
-`tw.hex` and `split_tw.hex`. Used by `tb_fft.v` and `tb_split.v`. The
-example also writes the ADC input and coefficients (`adc.hex`,
-`coefs.hex`, about 400 kB), for the polyphase FIR's test.
+`adc.hex` (the input), `packed.hex` (the FIR's output, the FFT's input),
+`fft.hex` (its bit-reversed output) and `bins.hex` (the split stage's
+N + 1 bins a frame). Used by `tb_fir.v`, `tb_fft.v`, `tb_split.v` and
+`tb_chain.v`. The ROM tables the RTL needs (coefficients, twiddles) come
+from the same run and live in `../../rtl/gen/pfb_*.mem`.

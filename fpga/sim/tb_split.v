@@ -27,11 +27,13 @@ module tb_split;
   wire signed [W-1:0] out_re, out_im;
   wire [LOGN-1:0]     out_k;
   wire [15:0]         out_frame;
+  wire                out_valid;
 
-  pfb_split #(.W(W), .LOGN(LOGN), .TW_FILE("vectors/split_tw.hex")) dut (
+  pfb_split #(.W(W), .LOGN(LOGN), .TW_FILE("../rtl/gen/pfb_split_tw.mem")) dut (
     .clk(clk), .ce(1'b1),
-    .in_re(in_re), .in_im(in_im), .in_idx(in_idx), .in_odd(in_odd),
-    .out_re(out_re), .out_im(out_im), .out_k(out_k), .out_frame(out_frame));
+    .in_re(in_re), .in_im(in_im), .in_idx(in_idx), .in_odd(in_odd), .in_valid(1'b1),
+    .out_re(out_re), .out_im(out_im), .out_k(out_k), .out_frame(out_frame),
+    .out_valid(out_valid));
 
   // the frames, then one more (zeros) that reads the last one out
   integer t = 0;

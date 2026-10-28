@@ -24,7 +24,7 @@ module tb_fft;
   wire signed [W-1:0] out_re, out_im;
   wire [LOGN-1:0]     out_idx;
 
-  r22sdf_fft #(.W(W), .LOGN(LOGN), .TW_FILE("vectors/tw.hex")) dut (
+  r22sdf_fft #(.W(W), .LOGN(LOGN), .TW_PREFIX("../rtl/gen/pfb_tw_")) dut (
     .clk(clk), .ce(1'b1),
     .in_re(in_re), .in_im(in_im), .in_idx(in_idx),
     .out_re(out_re), .out_im(out_im), .out_idx(out_idx));

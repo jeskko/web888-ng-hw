@@ -410,7 +410,21 @@ the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
    * Split stage (`pfb_split.v`, `make sim-split`): bit-exact ✓. It
      drops bin N (Nyquist: real, half of it above fs/2), so a frame of
      2048 clocks gives exactly 2048 bins, one per clock.
-   * next: the polyphase FIR, then a synthesis run for resources and
+   * Polyphase FIR (`pfb_fir.v`, `make sim-fir`): bit-exact ✓. The
+     history is 2T + 1 = 23 half-blocks of 2048 samples, two per 32-bit
+     word: one BRAM36 each; every bank reads the same word, each tap
+     muxes its bank. Coefficients: 6 ROMs (taps t and T - 1 - t share
+     one through its two ports, the prototype being symmetric).
+   * The whole chain, ADC samples to bins (`pfb_chain.v`, `make
+     sim-chain`): bit-exact ✓ (2026-10-28).
+   * ROM tables in `fpga/rtl/gen/pfb_*.mem`, written by the model's
+     `examples/pfbvectors.rs`: coefficients, and per-stage twiddles
+     (W_L^e for e < 3L/4: 2046 entries in all instead of 5 × 2048).
+   * BRAM estimate, before synthesis: history 23, coefficients 18 (2K ×
+     40 bits takes 3 BRAM36), split buffer ~6, FFT delay lines ~4,
+     twiddles ~3: ~54 of 60, before the register file and DMA FIFOs.
+     Tight; T = 10 (90 dB) saves 5.
+   * next: `make pfb` on CI (out of context) for the real resources and
      timing
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.

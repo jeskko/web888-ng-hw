@@ -20,7 +20,8 @@ module r22sdf_fft #(
   parameter integer LOGN   = 11,
   // bit s: a rounded halving after butterfly stage s (0..LOGN-1)
   parameter integer HALVES = 11'b11110001111,
-  parameter         TW_FILE = "tw.hex"
+  // the twiddle stages' tables: TW_PREFIX <pair> ".mem"
+  parameter         TW_PREFIX = "pfb_tw_"
 ) (
   input  wire                 clk,
   input  wire                 ce,
@@ -56,7 +57,8 @@ module r22sdf_fft #(
         .in_re(re[3*i+1]), .in_im(im[3*i+1]), .in_idx(idx[3*i+1]),
         .out_re(re[3*i+2]), .out_im(im[3*i+2]), .out_idx(idx[3*i+2]));
       if (L > 4) begin : g_tw
-        r22_tw #(.W(W), .TB(TB), .LOGN(LOGN), .L(L), .TW_FILE(TW_FILE)) tw (
+        localparam [7:0] DIGIT = 8'h30 + i;   // at most 10 pairs
+        r22_tw #(.W(W), .TB(TB), .LOGN(LOGN), .L(L), .TW_FILE({TW_PREFIX, DIGIT, ".mem"})) tw (
           .clk(clk), .ce(ce),
           .in_re(re[3*i+2]), .in_im(im[3*i+2]), .in_idx(idx[3*i+2]),
           .out_re(re[3*i+3]), .out_im(im[3*i+3]), .out_idx(idx[3*i+3]));

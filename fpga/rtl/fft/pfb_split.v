@@ -14,18 +14,20 @@
 // The FFT's frames arrive in its bit-reversed order (`in_idx` = in-place
 // position). A double buffer holds each frame while the next is written;
 // the frame before is read at bit-reversed k and N - k through both
-// ports. `in_odd` is the frame's parity, sampled at its first input.
+// ports. A frame starts where `in_idx` wraps from N - 1 to 0 (or at the
+// first input). `in_odd` and `in_valid` are the frame's parity and
+// validity, sampled at its start; `out_valid` carries the latter.
 //
 // Arithmetic as the fixed-point model (web888-dsp `pfbfx`): sums exact,
 // the twiddle product rounded by TB - 1 bits (not saturated), then a
 // rounded halving and saturation to W. `out_frame` counts output frames;
-// the first (before any input frame was complete) is not valid.
+// the first (before any input frame was complete) is garbage.
 
 module pfb_split #(
   parameter integer W    = 25,
   parameter integer TB   = 18,
   parameter integer LOGN = 11,
-  parameter         TW_FILE = "split_tw.hex"
+  parameter         TW_FILE = "pfb_split_tw.mem"
 ) (
   input  wire                 clk,
   input  wire                 ce,
@@ -33,10 +35,12 @@ module pfb_split #(
   input  wire signed [W-1:0]  in_im,
   input  wire [LOGN-1:0]      in_idx,
   input  wire                 in_odd,
+  input  wire                 in_valid,
   output reg  signed [W-1:0]  out_re = 0,
   output reg  signed [W-1:0]  out_im = 0,
   output reg  [LOGN-1:0]      out_k = 0,
-  output reg  [15:0]          out_frame = 0
+  output reg  [15:0]          out_frame = 0,
+  output reg                  out_valid = 1'b0
 );
 
   localparam integer N = 1 << LOGN;
@@ -55,9 +59,10 @@ module pfb_split #(
   initial $readmemh(TW_FILE, tw);
 
   reg        wsel = 1'b0;
-  reg  [1:0] odd_of = 2'b00;
+  reg  [1:0] odd_of = 2'b00, valid_of = 2'b00;
   reg [15:0] frames = 0;
-  wire       first = (in_idx == {LOGN{1'b0}});
+  reg [LOGN-1:0] prev_idx = {LOGN{1'b1}};
+  wire       first = (in_idx == {LOGN{1'b0}}) && (prev_idx == {LOGN{1'b1}});
   wire       wsel_now = first ? ~wsel : wsel;
   wire [LOGN-1:0] k  = in_idx;           // the bin read now (in order)
   wire [LOGN-1:0] nk = -in_idx;          // N - k, mod N
@@ -66,13 +71,15 @@ module pfb_split #(
   reg [2*W-1:0]  za = 0, zb = 0;
   reg [2*TB-1:0] w1 = 0;
   reg [LOGN-1:0] k1 = 0;
-  reg            odd1 = 1'b0;
+  reg            odd1 = 1'b0, val1 = 1'b0;
   reg [15:0]     f1 = 0;
   always @(posedge clk)
     if (ce) begin
       mem[{wsel_now, in_idx}] <= {in_re, in_im};
+      prev_idx <= in_idx;
       if (first) begin
-        odd_of[wsel_now] <= in_odd;
+        odd_of[wsel_now]   <= in_odd;
+        valid_of[wsel_now] <= in_valid;
         frames <= frames + 1'b1;
       end
       wsel <= wsel_now;
@@ -81,6 +88,7 @@ module pfb_split #(
       w1   <= tw[k];
       k1   <= k;
       odd1 <= odd_of[~wsel_now];
+      val1 <= valid_of[~wsel_now];
       f1   <= first ? frames : f1;
     end
 
@@ -90,7 +98,7 @@ module pfb_split #(
   reg signed [W:0]    e_re = 0, e_im = 0, o_re = 0, o_im = 0;
   reg signed [TB-1:0] w_re = 0, w_im = 0;
   reg [LOGN-1:0]      k2 = 0;
-  reg                 odd2 = 1'b0;
+  reg                 odd2 = 1'b0, val2 = 1'b0;
   reg [15:0]          f2 = 0;
   always @(posedge clk)
     if (ce) begin
@@ -103,6 +111,7 @@ module pfb_split #(
       w_im <= w1[TB-1:0];
       k2   <= k1;
       odd2 <= odd1;
+      val2 <= val1;
       f2   <= f1;
     end
 
@@ -113,7 +122,7 @@ module pfb_split #(
   reg signed [PW-1:0]  m_re = 0, m_im = 0;
   reg signed [W:0]     e3_re = 0, e3_im = 0;
   reg [LOGN-1:0]       k3 = 0;
-  reg                  odd3 = 1'b0;
+  reg                  odd3 = 1'b0, val3 = 1'b0;
   reg [15:0]           f3 = 0;
   always @(posedge clk)
     if (ce) begin
@@ -123,6 +132,7 @@ module pfb_split #(
       e3_im <= e_im;
       k3    <= k2;
       odd3  <= odd2;
+      val3  <= val2;
       f3    <= f2;
     end
 
@@ -152,6 +162,7 @@ module pfb_split #(
       out_im    <= flip ? -c_im : c_im;
       out_k     <= k3;
       out_frame <= f3;
+      out_valid <= val3;
     end
 
 endmodule
