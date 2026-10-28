@@ -145,6 +145,49 @@ The open driver works in the emulator but is untested on hardware. Until
 it is, units run the vendor firmware, with web888d on it where wanted (as
 on the production unit since 2026-10-28; `hardware-test-plan.md`).
 
+## Switching the production unit remotely (evaluated 2026-10-29)
+
+The unit can't be power-cycled or reached locally, so the first boot of
+our image must not depend on a working image. Facts in
+`stock-unit-facts.md` §Boot chain: one FAT partition, no U-Boot, the boot
+ROM always loads `BOOT.BIN`, the stock kernel has no kexec.
+
+**Proposed: the stock image stays the golden image; ours is chain-loaded
+under the hardware watchdog.** `BOOT.BIN` and the partition table are
+never touched.
+
+1. From stock Linux, arm the SWDT through its registers (not the driver:
+   then nothing kicks it), with its longest timeout (about 10 min), reset
+   on expiry.
+2. A small kernel module for the stock 6.6.110-xilinx kernel (kexec's
+   job without kexec): CPU1 offlined first, our zImage, DTB and initramfs
+   in a CMA buffer, caches flushed, MMU off, jump.
+3. Our image keeps the watchdog running (`cdns_wdt` built in,
+   `clk_ignore_unused` so its clock isn't gated) and starts kicking it only
+   when web888d streams **and** someone confirms over the network within
+   the timeout. Its root is a squashfs file on the FAT, mounted read-only.
+4. Anything that goes wrong (a hang in the module, the jump, our kernel,
+   the driver, the PL bus, no network) ends in a watchdog reset; the boot
+   ROM loads the stock `BOOT.BIN` and the unit is back as it is today.
+5. Later, for every boot: an early service in the stock apkovl
+   chain-loads ours, with an attempt counter in REBOOT_STATUS[31:24]
+   (kept over non-POR resets) to stop after failures. A new `BOOT.BIN`
+   only once a test unit has run it.
+
+What the safety net rests on, and how to check it before the first try:
+
+| assumption | check |
+|---|---|
+| a SWDT timeout resets this board and it comes back on stock | arm it for 60 s from stock Linux and let it fire (a reboot; needs the user's go-ahead) |
+| the new kernel doesn't stop or ungate the SWDT before our userspace runs | `cdns_wdt` source; the module's dry run (below) shows the timer still counting after the jump |
+| the module works on the stock kernel (no headers or config shipped: built against linux-xlnx 6.6.110 with a matching config; vermagic from the stock modules) | QEMU with the stock kernel, DTB and initrd from `boot.bin`; then on the unit, a dry run chain-loading the **stock** kernel itself (failure: watchdog reset to stock) |
+| our image mounts the FAT read-only | image config, checked in the emulator |
+
+What would still need hands on site: the watchdog not resetting the
+board after all (step 1 of the checks finds that out with a stock
+reboot's risk), or a hardware state that survives a watchdog reset but
+not a power cycle.
+
 ## Not verified
 
 * Debian's long-term armhf plans; Ubuntu 26.04 armhf images.

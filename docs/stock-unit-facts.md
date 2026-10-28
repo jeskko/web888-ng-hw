@@ -57,6 +57,29 @@ What a bitstream loaded on this firmware finds (read from the PS side:
   board), `nowayout=0`, 10 s default timeout; nothing arms it on the stock
   firmware. Kernel `panic=120`, `panic_on_oops=0`.
 
+## Boot chain (2026-10-29)
+
+- **One FAT partition** (1.8 GB, 25 % used) holds everything. **No U-Boot**:
+  `boot.bin` (9 MB, the same file as `x/boot.bin`) is FSBL + a 13-word
+  stub at 0x100000 + DTB at 0x2000000 + kernel at 0x2008000 + initrd (4
+  MB) at 0x3000000, all loaded by the FSBL (red-pitaya-notes' Alpine
+  scheme). The stub unlocks the SLCR, enables the level shifters, sets the
+  SCU filter start to 0x02000000 and jumps to the kernel with r2 = the
+  DTB. The FSBL is a release build (no debug strings) with the Si5351
+  hook.
+- `bootargs`: `console=ttyPS0,115200 earlycon earlyprintk
+  initrd=0x3000000,4M modloop=modloop` (from the DTB).
+- `fw_printenv` reads a U-Boot-format environment from the **I2C EEPROM**
+  (0x1800, 1 KB): board data (`serial`, `hw_rev`, `prod_date`,
+  `refclock`, MACs) plus an unused `bootcmd`; nothing on the unit runs
+  U-Boot.
+- The boot ROM can't fall back on SD: "The SD card boot mode does not
+  support header search or multiboot" (UG585), so it always loads
+  `BOOT.BIN`.
+- The kernel has **no kexec** (`sys_kexec_load` is the weak not-implemented
+  stub; no `machine_kexec`, no `/sys/kernel/kexec_loaded`). CPU hotplug
+  is there (`cpu1/online`). The watchdog driver has no shutdown hook.
+
 ## Device tree (live)
 
 ```
