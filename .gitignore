@@ -1,2 +1,3 @@
 /tools/zynqsdr-probe/zynqsdr_probe
+/tools/wdt/wdt
 __pycache__/

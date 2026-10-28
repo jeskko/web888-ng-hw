@@ -1,5 +1,41 @@
 # Hardware test plan (open bitstream on stock firmware)
 
+## 0. Safety net on a remote unit: the watchdog
+
+A unit nobody can power-cycle (the production unit) must not hang for
+good. A hard hang (e.g. an AXI access nothing answers) stalls the CPU. The
+Zynq's hardware watchdog then resets the board, if something armed it.
+Nothing does on the stock firmware. `tools/wdt` (static ARMv7) arms it for
+a test:
+
+    wdt info                    # identity, options; disarms at once
+    wdt keep 30 0 &             # kick every 7 s until /tmp/wdt.stop exists
+    ...test...
+    touch /tmp/wdt.stop         # disarm (magic close)
+    wdt hang 30                 # simulate a hang: reset after 30 s
+
+Facts on the stock firmware (production unit, 2026-10-28):
+* `cdns_wdt` with `reset-on-timeout` in the DT (a timeout resets the
+  board, not just an interrupt), `nowayout=0` (the magic close disarms
+  it), and a 10 s default timeout. Options 0x8180: settable timeout,
+  keepalive, magic close.
+* `info` and `keep 30 40` disarm cleanly; the unit stays up.
+* `hang 30`: ping is lost 30 s after arming. The board answers ping again
+  25 s later, and ssh a second after that. sdrd, gpsd, chronyd and the
+  stock web UI come back by themselves, and chrony sets the clock within
+  about a minute (no RTC: the clock starts in the past).
+* The SD's FAT partition is mounted read-only but remounted rw when stock
+  saves its config. Run `sync` and check `mount` shows `ro` before
+  anything that may reset the board.
+* Kernel `panic=120` reboots 120 s after a panic; `panic_on_oops=0`.
+
+Limits: the watchdog only runs while `wdt keep` runs. A hang during boot
+(before anyone arms it) still needs a power cycle. So on a remote unit,
+load test bitstreams at run time (`web888d serve --bitstream PATH`, with
+`wdt keep` running) rather than by replacing `websdr_hf.bit` on the SD and
+rebooting. The stock driver's device check has then already passed for
+this boot.
+
 ## 1. Prepare a stock SD card
 
 The unit ships without one. Follow the vendor guide
