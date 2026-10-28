@@ -11,7 +11,7 @@
 //
 // The stage's own table: W_L^e for e < 3L/4 (`TW_FILE`, {re, im} TB bits
 // each; rtl/gen/pfb_tw_<pair>.mem from web888-dsp examples/pfbvectors.rs).
-// Two cycles of latency.
+// Five cycles of latency.
 
 module r22_tw #(
   parameter integer W    = 25,
@@ -59,30 +59,49 @@ module r22_tw #(
       idx1 <= in_idx;
     end
 
-  // stage 2: multiply, round, saturate
+  // stages 2-5, one carry chain each (122.88 MHz): the four products
+  // (DSP48), their sums, the rounding shift, the saturation
   localparam integer PW = W + TB + 1;
-  wire signed [PW-1:0] p_re = a_re * w_re - a_im * w_im;
-  wire signed [PW-1:0] p_im = a_re * w_im + a_im * w_re;
+  localparam integer HW = PW - TB + 1;          // after the shift
+  reg signed [W+TB-1:0] m_rr = 0, m_ii = 0, m_ri = 0, m_ir = 0;
+  reg signed [PW-1:0]   s_re = 0, s_im = 0;
+  reg signed [HW-1:0]   h_re = 0, h_im = 0;
+  reg signed [W-1:0]    a2_re = 0, a2_im = 0, a3_re = 0, a3_im = 0, a4_re = 0, a4_im = 0;
+  reg [2:0]             pass_d = 3'b111;
+  reg [LOGN-1:0]        idx2 = 0, idx3 = 0, idx4 = 0;
 
-  function signed [W-1:0] fit;
-    input signed [PW-1:0] v;
-    reg signed [PW-1:0] h;
+  function signed [W-1:0] sat;
+    input signed [HW-1:0] h;
     begin
-      h = (v + (1 <<< (TB - 2))) >>> (TB - 1);
-      if (h > $signed({{(PW-W+1){1'b0}}, {(W-1){1'b1}}}))
-        fit = {1'b0, {(W-1){1'b1}}};
-      else if (h < -$signed({{(PW-W){1'b0}}, 1'b1, {(W-1){1'b0}}}))
-        fit = {1'b1, {(W-1){1'b0}}};
+      if (h > $signed({{(HW-W+1){1'b0}}, {(W-1){1'b1}}}))
+        sat = {1'b0, {(W-1){1'b1}}};
+      else if (h < -$signed({{(HW-W){1'b0}}, 1'b1, {(W-1){1'b0}}}))
+        sat = {1'b1, {(W-1){1'b0}}};
       else
-        fit = h[W-1:0];
+        sat = h[W-1:0];
     end
   endfunction
 
   always @(posedge clk)
     if (ce) begin
-      out_re  <= pass ? a_re : fit(p_re);
-      out_im  <= pass ? a_im : fit(p_im);
-      out_idx <= idx1;
+      // 2: products
+      m_rr <= a_re * w_re;
+      m_ii <= a_im * w_im;
+      m_ri <= a_re * w_im;
+      m_ir <= a_im * w_re;
+      a2_re <= a_re; a2_im <= a_im; pass_d[0] <= pass; idx2 <= idx1;
+      // 3: sums
+      s_re <= m_rr - m_ii;
+      s_im <= m_ri + m_ir;
+      a3_re <= a2_re; a3_im <= a2_im; pass_d[1] <= pass_d[0]; idx3 <= idx2;
+      // 4: rounded by TB - 1 bits (half up)
+      h_re <= (s_re + (1 <<< (TB - 2))) >>> (TB - 1);
+      h_im <= (s_im + (1 <<< (TB - 2))) >>> (TB - 1);
+      a4_re <= a3_re; a4_im <= a3_im; pass_d[2] <= pass_d[1]; idx4 <= idx3;
+      // 5: saturated, or the sample unchanged where the twiddle is 1
+      out_re  <= pass_d[2] ? a4_re : sat(h_re);
+      out_im  <= pass_d[2] ? a4_im : sat(h_im);
+      out_idx <= idx4;
     end
 
 endmodule

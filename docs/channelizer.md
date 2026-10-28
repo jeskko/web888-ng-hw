@@ -445,7 +445,12 @@ is checked bit for bit against them: the FFT on `packed.hex` →
      (48 %), registers 2551 (7 %), **BRAM 51.5 of 60 (86 %)**; timing
      **WNS −10.07 ns**: the FIR summed its 11 products in one clock (a
      16.2 ns chain of 8 DSPs). Now a registered pairwise tree (4 levels),
-     still bit-exact; rerun pending.
+     still bit-exact.
+   * Second run (aeba121): **WNS −4.56 ns**, now the FFT's twiddle
+     multipliers (products, sum, rounding and saturation in one clock:
+     11.5–12 ns). Those and the split's multiply are now pipelined one
+     carry chain per clock (twiddle stages 5 clocks, split 8); still
+     bit-exact. Same BRAM (51.5) and LUTs (8513).
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air

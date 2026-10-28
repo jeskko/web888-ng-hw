@@ -115,54 +115,79 @@ module pfb_split #(
       f2   <= f1;
     end
 
-  // stage 3: the twiddle product, rounded by TB - 1 bits
-  localparam integer PW = W + 1 + TB + 1;
-  wire signed [PW-1:0] p_re = o_re * w_re - o_im * w_im;
-  wire signed [PW-1:0] p_im = o_re * w_im + o_im * w_re;
-  reg signed [PW-1:0]  m_re = 0, m_im = 0;
-  reg signed [W:0]     e3_re = 0, e3_im = 0;
-  reg [LOGN-1:0]       k3 = 0;
-  reg                  odd3 = 1'b0, val3 = 1'b0;
-  reg [15:0]           f3 = 0;
-  always @(posedge clk)
-    if (ce) begin
-      m_re  <= (p_re + (1 <<< (TB - 2))) >>> (TB - 1);
-      m_im  <= (p_im + (1 <<< (TB - 2))) >>> (TB - 1);
-      e3_re <= e_re;
-      e3_im <= e_im;
-      k3    <= k2;
-      odd3  <= odd2;
-      val3  <= val2;
-      f3    <= f2;
+  // stages 3-8, one carry chain each (122.88 MHz): the four products
+  // (DSP48), their sums, the product rounded by TB - 1 bits (not
+  // saturated), e + o', its halving and saturation, then conjugation and
+  // the odd bins' sign on odd frames (both wrap like the model's W-bit
+  // vectors)
+  localparam integer PW = W + 1 + TB + 1;     // the sums of products
+  localparam integer MW = PW - TB + 1;        // after the rounding shift
+  localparam integer TW = MW + 1;             // e + o'
+  localparam integer DL = 5;                  // stages 3..7 before the output
+  reg signed [W+1+TB-1:0] q_rr = 0, q_ii = 0, q_ri = 0, q_ir = 0;
+  reg signed [PW-1:0]     p_re = 0, p_im = 0;
+  reg signed [MW-1:0]     m_re = 0, m_im = 0;
+  reg signed [TW-1:0]     t_re = 0, t_im = 0;
+  reg signed [W-1:0]      x_re = 0, x_im = 0;
+  // e and the bookkeeping, delayed alongside
+  reg signed [W:0]        ed_re [0:2];
+  reg signed [W:0]        ed_im [0:2];
+  reg [LOGN-1:0]          kd [0:DL-1];
+  reg                     oddd [0:DL-1];
+  reg                     vald [0:DL-1];
+  reg [15:0]              fd [0:DL-1];
+  integer n;
+  initial
+    for (n = 0; n < DL; n = n + 1) begin
+      kd[n] = 0; oddd[n] = 1'b0; vald[n] = 1'b0; fd[n] = 0;
+      if (n < 3) begin ed_re[n] = 0; ed_im[n] = 0; end
     end
 
-  // stage 4: (e + o') halved, saturated; conjugated; odd bins of odd
-  // frames negated (both wrap like the model's W-bit vectors)
   function signed [W-1:0] fit;
-    input signed [PW:0] v;
-    reg signed [PW:0] h;
+    input signed [TW-1:0] v;
+    reg signed [TW-1:0] h;
     begin
       h = (v + 1) >>> 1;
-      if (h > $signed({{(PW-W+2){1'b0}}, {(W-1){1'b1}}}))
+      if (h > $signed({{(TW-W+1){1'b0}}, {(W-1){1'b1}}}))
         fit = {1'b0, {(W-1){1'b1}}};
-      else if (h < -$signed({{(PW-W+1){1'b0}}, 1'b1, {(W-1){1'b0}}}))
+      else if (h < -$signed({{(TW-W){1'b0}}, 1'b1, {(W-1){1'b0}}}))
         fit = {1'b1, {(W-1){1'b0}}};
       else
         fit = h[W-1:0];
     end
   endfunction
 
-  wire signed [W-1:0] x_re = fit(e3_re + m_re);
-  wire signed [W-1:0] x_im = fit(e3_im + m_im);
-  wire                flip = odd3 && k3[0];
-  wire signed [W-1:0] c_im = -x_im;
   always @(posedge clk)
     if (ce) begin
-      out_re    <= flip ? -x_re : x_re;
-      out_im    <= flip ? -c_im : c_im;
-      out_k     <= k3;
-      out_frame <= f3;
-      out_valid <= val3;
+      // 3: products
+      q_rr <= o_re * w_re;
+      q_ii <= o_im * w_im;
+      q_ri <= o_re * w_im;
+      q_ir <= o_im * w_re;
+      // 4: sums
+      p_re <= q_rr - q_ii;
+      p_im <= q_ri + q_ir;
+      // 5: rounded
+      m_re <= (p_re + (1 <<< (TB - 2))) >>> (TB - 1);
+      m_im <= (p_im + (1 <<< (TB - 2))) >>> (TB - 1);
+      // 6: e + o' (e from stage 2, three stages back)
+      t_re <= ed_re[2] + m_re;
+      t_im <= ed_im[2] + m_im;
+      // 7: halved, saturated
+      x_re <= fit(t_re);
+      x_im <= fit(t_im);
+      // 8: conjugated, odd bins of odd frames negated
+      out_re    <= (oddd[DL-1] && kd[DL-1][0]) ? -x_re : x_re;
+      out_im    <= (oddd[DL-1] && kd[DL-1][0]) ? x_im : -x_im;
+      out_k     <= kd[DL-1];
+      out_frame <= fd[DL-1];
+      out_valid <= vald[DL-1];
+      ed_re[0] <= e_re; ed_im[0] <= e_im;
+      for (n = 1; n < 3; n = n + 1) begin ed_re[n] <= ed_re[n-1]; ed_im[n] <= ed_im[n-1]; end
+      kd[0] <= k2; oddd[0] <= odd2; vald[0] <= val2; fd[0] <= f2;
+      for (n = 1; n < DL; n = n + 1) begin
+        kd[n] <= kd[n-1]; oddd[n] <= oddd[n-1]; vald[n] <= vald[n-1]; fd[n] <= fd[n-1];
+      end
     end
 
 endmodule
