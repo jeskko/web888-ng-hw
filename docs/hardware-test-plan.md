@@ -127,6 +127,15 @@ FCLK_RESET0_N. Take the bus reset from a power-on counter in the PL
 and drop the FCLK idea above: a PS clock is only there if the loader
 enables it.
 
+**Fixed (hw aba7f73): the open bitstream runs on the production unit
+(2026-10-28).** The bus reset now comes from a PL power-on counter.
+`load-bit.sh steps` with the watchdog kicker running:
+1. devcfg load: exit 0. SLCR as before.
+2. The first PL reads answer: signature `0x0E5D020C`, DNA read.
+3. web888d (`bitstream = "none"`, stock zynqsdr driver): RX at 48.1 k
+   frames/s, `hw_rate_ok`, no ADC overloads. FT8 decodes on 30 m and 20 m
+   in the first slot, the same as on the stock bitstream.
+
 ## 1. Prepare a stock SD card
 
 The unit ships without one. Follow the vendor guide
