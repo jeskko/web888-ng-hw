@@ -90,6 +90,16 @@ module pfb_fir #(
     end
   endfunction
 
+  // each tap's bank for the first half of a block, (jb - 1 - 2t) mod NB,
+  // kept in a register that steps with jb (the second half's is one less)
+  reg [BB-1:0] base [0:T-1];
+  integer bt;
+  initial for (bt = 0; bt < T; bt = bt + 1) base[bt] = bank_of(bt, {BB{1'b0}}, 1'b0);
+  always @(posedge clk)
+    if (ce && last)
+      for (bt = 0; bt < T; bt = bt + 1)
+        base[bt] <= (base[bt] == NB - 1) ? {BB{1'b0}} : base[bt] + 1'b1;
+
   // stage 1: every bank reads word w; the taps' banks, coefficient words
   wire [2*WI-1:0] bank_q [0:NB-1];
   genvar b, t;
@@ -114,7 +124,8 @@ module pfb_fir #(
   integer i;
   always @(posedge clk)
     if (ce) begin
-      for (i = 0; i < T; i = i + 1) sel1[i] <= bank_of(i, jb, hb);
+      for (i = 0; i < T; i = i + 1)
+        sel1[i] <= !hb ? base[i] : (base[i] == 0) ? NB - 1 : base[i] - 1'b1;
       k1   <= k;
       v1   <= (filled >= 2 * T);
       odd1 <= jpar;

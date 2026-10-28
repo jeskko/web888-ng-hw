@@ -500,6 +500,13 @@ the room for the longest one.
    * Outputs (§3.7): bin selector, power line, two ring writers
      (`pfb_top.v`); `make sim-out`, `make sim-top` (ADC to DDR) pass.
      The out-of-context run now synthesises `pfb_top`.
+   * First `pfb_top` run (96b8058): BRAM 51.5, LUT 13 026 (74 %; Vivado
+     moved some chain memories to LUT RAM), DSP 56; **WNS −0.74 ns** in
+     the power line's line bookkeeping (a 16-bit add and compare at a
+     frame's start) and the FIR's tap → bank modulo (−0.33). Now: the
+     power line's tests come from registers computed during the frame
+     before, and each tap's bank is a register stepped with the block
+     (`base`, the second half one less). Still bit-exact.
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air

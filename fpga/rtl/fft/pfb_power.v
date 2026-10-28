@@ -36,23 +36,36 @@ module pfb_power #(
 
   localparam integer N = 1 << LOGN;
 
-  // ---- lines: the frame's place in its line
+  // ---- lines: the frame's place in its line. The tests at a frame's
+  // start use registers computed while the frame before ran (fcnt and
+  // n_line only change at a start), so the start itself is a mux.
   wire        start = ce && in_valid && (in_k == 0);
   reg  [15:0] n_line = 16'd0;                // frames in the current line
   reg  [15:0] fcnt = 16'd0;                  // this frame's index in it
   reg         on = 1'b0;                     // the line runs
   reg  [31:0] line = 32'd0;
-  // at a frame's start: does a line begin here, is this its last frame
-  wire        begin_now = start && (!on || fcnt + 1'b1 >= n_line);
-  wire        on_now  = begin_now ? (enable && frames != 0) : on;
-  wire [15:0] n_now   = begin_now ? frames : n_line;
-  wire [15:0] f_now   = begin_now ? 16'd0 : (start ? fcnt + 1'b1 : fcnt);
+  reg         ends_r = 1'b1;                 // the frame now ends its line (or none runs)
+  reg         next_last_r = 1'b0;            // the next frame is its line's last
+  reg         one_r = 1'b0, on_r = 1'b0;     // a new line: one frame long; on
+  reg         first_f = 1'b0, last_f = 1'b0; // this frame's flags
+  always @(posedge clk) begin
+    ends_r      <= !on || (fcnt + 1'b1 >= n_line);
+    next_last_r <= (fcnt + 2'd2 >= n_line);
+    one_r       <= (frames <= 16'd1);
+    on_r        <= enable && (frames != 16'd0);
+  end
+  wire        begin_now = start && ends_r;
+  wire        on_now    = begin_now ? on_r : on;
+  wire        first_now = start ? begin_now : first_f;
+  wire        last_now  = start ? (begin_now ? one_r : next_last_r) : last_f;
   always @(posedge clk)
     if (ce && start) begin
       if (begin_now && on) line <= line + 1'b1;
-      on     <= on_now;
-      n_line <= n_now;
-      fcnt   <= f_now;
+      on      <= on_now;
+      n_line  <= begin_now ? frames : n_line;
+      fcnt    <= begin_now ? 16'd0 : fcnt + 1'b1;
+      first_f <= first_now;
+      last_f  <= last_now;
     end
 
   // ---- stage 1: inputs, the RAM read
@@ -70,8 +83,8 @@ module pfb_power #(
       i1     <= in_im;
       k1     <= in_k;
       v1     <= in_valid && on_now;
-      first1 <= (f_now == 0);
-      last1  <= (f_now + 1'b1 >= n_now);
+      first1 <= first_now;
+      last1  <= last_now;
       a2     <= acc[in_k];
       a3     <= a2;
       a4     <= a3;
