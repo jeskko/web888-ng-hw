@@ -37,13 +37,16 @@ module web888_core #(
 
   // PS interface
   input  wire        ps_resetn,
+  // PS clock FCLK_CLK0 (liveness bits only)
+  input  wire        fclk,
   (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 clk_out CLK" *)
   (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_axi:m_axi_rx:m_axi_wf0:m_axi_wf1, FREQ_HZ 122880000" *)
   output wire        clk_out,
   (* X_INTERFACE_INFO = "xilinx.com:signal:interrupt:1.0 irq INTERRUPT" *)
   (* X_INTERFACE_PARAMETER = "SENSITIVITY EDGE_RISING, PortWidth 4" *)
   output wire [3:0]  irq,
-  output wire        pps_gpio,
+  // EMIO GPIO 54.. : PPS, then liveness bits (see below)
+  output wire [7:0]  emio_gpio,
 
   // AXI3 slave (GP0)
   input  wire [11:0] s_axi_awid,
@@ -203,9 +206,10 @@ module web888_core #(
 );
 
   // ---------------------------------------------------------------- clock/reset
-  wire clk, pll_locked;
+  wire clk, pll_locked, clk_raw;
   clk_gen #(.CLKIN_PERIOD_PS(CLKIN_PERIOD_PS), .MULT(PLL_MULT)) clkgen (
-    .clk_p(adc_clk_p_i), .clk_n(adc_clk_n_i), .clk(clk), .locked(pll_locked));
+    .clk_p(adc_clk_p_i), .clk_n(adc_clk_n_i), .clk(clk), .locked(pll_locked),
+    .clk_raw(clk_raw));
   assign clk_out = clk;
 
   // Two resets:
@@ -478,7 +482,25 @@ module web888_core #(
     .fifo_data(pps_fifo_data), .fifo_valid(pps_fifo_valid), .fifo_pop(pps_fifo_pop),
     .fifo_count(pps_count), .last(pps_last), .edge_pulse(pps_edge));
 
-  assign pps_gpio = pps_i;   // EMIO GPIO 54 -> kernel pps-gpio / chrony
+  // ---------------------------------------------------------------- liveness
+  // On EMIO GPIO next to the PPS (54 -> kernel pps-gpio / chrony). The PS
+  // reads them from its GPIO controller (bank 2 DATA_RO, 0xE000A068)
+  // without any access to the PL, so a bus whose clock doesn't run (which
+  // hangs the CPU on the first GP0 access) can be diagnosed safely. The
+  // heartbeats are free-running counters (no reset), toggling about once a
+  // second: bus clock, the ADC clock before the PLL, and FCLK_CLK0 (50 MHz
+  // on the stock firmware) as a control.
+  //   0 PPS   1 PLL locked   2 bus clock heartbeat   3 bus reset (1 = held)
+  //   4 PS reset input (FCLK_RESET0_N)   5 ADC clock heartbeat
+  //   6 FCLK_CLK0 heartbeat   7 0
+  reg [26:0] hb_clk = 27'd0;
+  reg [26:0] hb_adc = 27'd0;
+  reg [25:0] hb_fclk = 26'd0;
+  always @(posedge clk)     hb_clk  <= hb_clk + 1'b1;
+  always @(posedge clk_raw) hb_adc  <= hb_adc + 1'b1;
+  always @(posedge fclk)    hb_fclk <= hb_fclk + 1'b1;
+  assign emio_gpio = {1'b0, hb_fclk[25], hb_adc[26], ps_resetn, rst, hb_clk[26],
+                      pll_locked, pps_i};
 
   // ---------------------------------------------------------------- DNA
   wire [56:0] dna;

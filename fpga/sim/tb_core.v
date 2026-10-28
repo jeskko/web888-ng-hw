@@ -46,6 +46,10 @@ module tb_core;
   wire        clk_out;
   wire [3:0]  irq;
   wire        pps_gpio, adc_pga, adc_dith, led;
+  wire [7:0]  emio_gpio;
+  assign pps_gpio = emio_gpio[0];
+  reg         fclk = 0;
+  always #10 fclk = ~fclk;   // 50 MHz
   wire [5:0]  antenna;
 
   reg  [11:0] awid = 0, arid = 0;
@@ -86,7 +90,7 @@ module tb_core;
   web888_core #(.ROM_FILE("../rtl/gen/sincos_qw.mem"), .BUILD_ID(32'h2026_1016)) dut (
     .adc_clk_p_i(adc_clk), .adc_clk_n_i(~adc_clk), .adc_dat_a_i(adc_dat), .adc_ofl_i(1'b0),
     .adc_pga_o(adc_pga), .adc_dith_o(adc_dith), .pps_i(pps), .antenna_o(antenna), .led_o(led),
-    .ps_resetn(ps_resetn), .clk_out(clk_out), .irq(irq), .pps_gpio(pps_gpio),
+    .ps_resetn(ps_resetn), .clk_out(clk_out), .irq(irq), .emio_gpio(emio_gpio), .fclk(fclk),
     .s_axi_awid(awid), .s_axi_awaddr(awaddr), .s_axi_awlen(4'd0), .s_axi_awsize(3'd2),
     .s_axi_awburst(2'b01), .s_axi_awlock(2'b00), .s_axi_awcache(4'd0), .s_axi_awprot(3'd0),
     .s_axi_awqos(4'd0), .s_axi_awvalid(awvalid), .s_axi_awready(awready),

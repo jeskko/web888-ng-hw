@@ -19,7 +19,9 @@ module clk_gen #(
   input  wire clk_p,
   input  wire clk_n,
   output wire clk,
-  output wire locked
+  output wire locked,
+  // the ADC clock before the PLL (for the liveness bits only)
+  output wire clk_raw
 );
 
   localparam real CLKIN_PERIOD = CLKIN_PERIOD_PS / 1000.0;
@@ -47,6 +49,7 @@ module clk_gen #(
 
   BUFG bufg_fb  (.I(fb_pll),  .O(fb_bufg));
   BUFG bufg_clk (.I(clk_pll), .O(clk));
+  BUFG bufg_raw (.I(clk_ibuf), .O(clk_raw));
 
 endmodule
 

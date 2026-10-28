@@ -64,8 +64,8 @@ set_property -dict [list \
   CONFIG.PCW_USE_S_AXI_HP1 {1} CONFIG.PCW_S_AXI_HP1_DATA_WIDTH {64} \
   CONFIG.PCW_USE_S_AXI_HP2 {1} CONFIG.PCW_S_AXI_HP2_DATA_WIDTH {64} \
   CONFIG.PCW_USE_FABRIC_INTERRUPT {1} CONFIG.PCW_IRQ_F2P_INTR {1} \
-  CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} CONFIG.PCW_GPIO_EMIO_GPIO_IO {1} \
-  CONFIG.PCW_EN_RST0_PORT {1} \
+  CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} CONFIG.PCW_GPIO_EMIO_GPIO_IO {8} \
+  CONFIG.PCW_EN_RST0_PORT {1} CONFIG.PCW_EN_CLK0_PORT {1} \
 ] [get_bd_cells ps_0]
 
 apply_bd_automation -rule xilinx.com:bd_rule:processing_system7 \
@@ -89,7 +89,8 @@ connect_bd_net [get_bd_pins core_0/clk_out] \
   [get_bd_pins ps_0/S_AXI_HP1_ACLK] [get_bd_pins ps_0/S_AXI_HP2_ACLK]
 connect_bd_net [get_bd_pins ps_0/FCLK_RESET0_N] [get_bd_pins core_0/ps_resetn]
 connect_bd_net [get_bd_pins core_0/irq]      [get_bd_pins ps_0/IRQ_F2P]
-connect_bd_net [get_bd_pins core_0/pps_gpio] [get_bd_pins ps_0/GPIO_I]
+connect_bd_net [get_bd_pins core_0/emio_gpio] [get_bd_pins ps_0/GPIO_I]
+connect_bd_net [get_bd_pins ps_0/FCLK_CLK0] [get_bd_pins core_0/fclk]
 
 # board ports: name direction msb (-1 = scalar)
 foreach {name dir msb} {
