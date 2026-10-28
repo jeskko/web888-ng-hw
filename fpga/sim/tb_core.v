@@ -199,8 +199,10 @@ module tb_core;
   initial begin
     $display("tb_core: start");
     repeat (10) @(posedge adc_clk);
-    ps_resetn = 1;
-    repeat (100) @(posedge clk_out);
+    // ps_resetn stays 0 throughout, as on a stock unit with fclk0 gated:
+    // the bus reset is power-on only, out of reset 128 clocks after lock
+    while (dut.rst) @(posedge clk_out);
+    repeat (10) @(posedge clk_out);
 
     // identification (open(): signature, DNA after ~3.7k clocks)
     r32(STS + 0, d);   check("signature", d, {16'h0E5D, 8'h02, 8'(NRX)});

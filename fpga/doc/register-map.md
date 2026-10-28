@@ -66,7 +66,7 @@ Flags (0x20):
 | 8 | ADC clock PLL locked |
 | 9 | DNA valid |
 | 10 / 11 / 12 | RX / WF0 / WF1 running |
-| 31:16 | ADC clock PLL unlock events since PS reset (saturating) |
+| 31:16 | ADC clock PLL unlock events since power-on (saturating) |
 
 ### Wedge detection and recovery
 

@@ -213,25 +213,29 @@ module web888_core #(
   assign clk_out = clk;
 
   // Two resets:
-  //  rst    bus-level: PS reset only. Register file, AXI slave and DMA
-  //         masters. Never asserted mid-transaction by a clock glitch, and the
-  //         driver's configuration survives an ADC clock PLL relock.
+  //  rst    bus-level: power-on only. Register file, AXI slave and DMA
+  //         masters. Released 128 clocks after the PLL first locks, and
+  //         never asserted again, so a clock glitch can't cut a transaction
+  //         and the driver's configuration survives a PLL relock. Not from
+  //         FCLK_RESET0_N: the PS holds that while fclk0 is gated, and the
+  //         stock kernel leaves fclk0 off, so the bus never left reset and
+  //         the first GP0 access hung the board (docs/hardware-test-plan.md).
+  //         A PS system reset clears the PL configuration anyway.
   //  rst_dp datapath: rst or PLL unlocked. DDC/CIC state, PPS, monitors; the
   //         RX packer pads the open frame so the ring stays aligned.
-  (* ASYNC_REG = "TRUE" *) reg [3:0] rst_sync;
-  (* ASYNC_REG = "TRUE" *) reg [3:0] lock_sync;
-  always @(posedge clk or negedge ps_resetn)
-    if (!ps_resetn) rst_sync <= 4'hf;
-    else            rst_sync <= {rst_sync[2:0], 1'b0};
-  always @(posedge clk or negedge ps_resetn)
-    if (!ps_resetn) lock_sync <= 4'hf;
-    else            lock_sync <= {lock_sync[2:0], !pll_locked};
-  wire rst    = rst_sync[3];
+  (* ASYNC_REG = "TRUE" *) reg [3:0] lock_sync = 4'hf;
+  always @(posedge clk) lock_sync <= {lock_sync[2:0], !pll_locked};
+  reg [7:0] por = 8'd0;
+  reg       rst = 1'b1;
+  always @(posedge clk) begin
+    if (!lock_sync[3] && !por[7]) por <= por + 1'b1;
+    rst <= !por[7];
+  end
   wire rst_dp = rst || lock_sync[3];
 
-  // PLL unlock events since PS reset (counted at the start of each unlock;
-  // lock_sync is already high during and right after PS reset)
-  reg        unlocked_d;
+  // PLL unlock events since power-on (counted at the start of each unlock;
+  // the first lock happens while rst is still held)
+  reg        unlocked_d = 1'b1;
   reg [15:0] unlock_count;
   always @(posedge clk) begin
     unlocked_d <= lock_sync[3];

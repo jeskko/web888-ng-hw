@@ -48,7 +48,7 @@ overflow).
 1. **Frame-atomic RX ring.** Words are admitted only as whole frames, so
    overflow drops complete frames (STS 0x34, flag 0).
 2. **Reset split.** A PLL unlock resets only the DSP datapath. CFG, the AXI
-   slave and the DMA masters run on the PS reset, so there's no config loss and
+   slave and the DMA masters run on a power-on reset, so there's no config loss and
    no half-finished AXI transaction. The packer zero-pads the interrupted frame.
 3. **Self-resync** on an out-of-order token in the shared CIC (flag 3).
 4. **Diagnostics**: frames/drops/bursts counters (0x30..0x3C), sticky AXI
