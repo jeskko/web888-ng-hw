@@ -1,8 +1,10 @@
 # Channelizer bitstream (design note)
 
 Status: **in progress** (2026-10-28): software model done, FFT
-architecture chosen (§3.6), Verilog next. This
-would be the core of the open-FPGA milestone (server design §11, M6).
+architecture chosen (§3.6), the Verilog datapath (polyphase FIR, FFT,
+split) bit-exact to the model in simulation; synthesis for resources and
+timing under way (§5). This would be the core of the open-FPGA
+milestone (server design §11, M6).
 It drops compatibility with the stock server's FPGA interface. The
 stock bitstream stays usable as a fallback with its own backend.
 
@@ -28,14 +30,18 @@ tuned receivers whose I/Q the CPU turns into spectra: our biggest CPU cost
 One channelizer splits the whole band at once, and the CPU only finishes
 the channels that are in use:
 
+```mermaid
+flowchart TD
+  adc["ADC: 122.88 MS/s, real"] --> pfb["polyphase filter bank<br/>M = 4096 branches, T taps each"]
+  pfb --> fft["4096-point real FFT<br/>every D = 2048 samples"]
+  fft --> bins["2048 bins, 30 kHz apart<br/>each a 60 kS/s complex stream (2× oversampled)"]
+  bins --> sel["bin selector"] --> dma1["DMA: only the bins<br/>users or decoders asked for"]
+  bins --> acc["|X|² accumulator"] --> dma2["DMA: full-band 0–61.44 MHz<br/>power spectrum"]
 ```
-ADC 122.88 MS/s real
-  └─▶ polyphase filter bank: M = 4096 branches, T taps each
-        └─▶ 4096-point real FFT every D = 2048 samples
-              └─▶ 2049 bins, 30 kHz apart, each a 60 kS/s complex stream (2× oversampled)
-                    ├─▶ bin selector ─▶ DMA: only the bins users or decoders asked for
-                    └─▶ |X|² accumulator ─▶ DMA: full-band 0–61.44 MHz power spectrum
-```
+
+(The real FFT gives 2049 bins; the hardware drops the Nyquist bin, which
+is real and half above fs/2, so a frame of 2048 clocks gives exactly 2048
+bins, one per clock.)
 
 * **Real input, no real→complex stage.** The filter bank works on the
   real ADC samples and the FFT is real-to-complex. Its band edges are at
@@ -111,9 +117,10 @@ re full-scale sine:
 
 So T = 11 equals today's chain for carriers up to about −20 dBFS. At
 −10 dBFS (very strong for HF on this ADC) its aliases sit about 115 dB
-down, right at the floor. **T = 12** (110 dB, measured −112) closes
-that gap for about 3 more BRAM (≈ 46 of 60): the recommendation if BRAM
-allows, with T = 11 as the fallback.
+down, right at the floor. **T = 12** (110 dB, measured −112) would close
+that gap for 3 more BRAM, but the first synthesis (§5) needs 51.5 of 60
+for the datapath alone at T = 11, so **T = 11** stays (the model and the
+RTL use it).
 
 The harness has to wait out the carriers' switch-on (200 ms, longer than
 the audio filter's ~60 ms block); measuring earlier showed onset
@@ -134,9 +141,9 @@ NB/NR on, before the NEON/decimator work.
 The waterfall's CPU cost goes away with this design: the full-band
 power line comes from the FPGA, and zoom-FFTs run over a few bins.
 
-BRAM: about 47 of 60 at T = 11 and 50 at T = 12, with the chosen
-widths and real BRAM layouts (§3.2). This first float-only estimate
-(~43) assumed perfect packing.
+BRAM: estimated at about 47 of 60 at T = 11 (§3.2) before the RTL
+existed; the synthesised datapath uses 51.5 (§5). The first float-only
+estimate (~43) assumed perfect packing.
 
 ### 3.2 Fixed-point widths (2026-10-23)
 
@@ -170,12 +177,14 @@ bin (bins away from the tones).
 * Output: bins as 32-bit I/Q, scaled so a full-scale sine reads 2^29,
   like today's RX samples, so the server's `rx_to_c32` applies
   unchanged. The 25 significant bits fit easily.
-* Bit-exact test vectors wait for the Verilog FFT architecture. A
-  radix-2² pipeline rounds at slightly different points than this
-  radix-2 model.
+* The table above was measured with the radix-2 arithmetic. The chosen
+  Verilog FFT is radix-2², which rounds at other points; the model has
+  it too (`FftArch::Radix22`, §3.6), with the same floor, and it is the
+  reference for the bit-exact tests.
 
-**BRAM recount** at T = 12. A BRAM36 holds 2K×18, 16K×2 or 1K×36, so
-widths don't pack perfectly:
+**BRAM recount** at T = 12 (before the RTL; the synthesised numbers are
+in §5). A BRAM36 holds 2K×18, 16K×2 or 1K×36, so widths don't pack
+perfectly:
 
 | memory | layout | BRAM36 |
 |---|---|---|
@@ -344,12 +353,15 @@ flowchart LR
   multipliers). The split stage needs one more (3 DSP).
 * **Delay lines:** 1024 + 512 + … + 1 = 2047 complex words of 2 × 25
   bits in total: the long ones (1024, 512, 256) in BRAM (about 3 BRAM36),
-  the rest in SRL/LUT RAM. Twiddles: a quarter-wave table (512 entries
-  of 2 × 18 bits) serves every multiplier by symmetry (about 1 BRAM36).
+  the rest in SRL/LUT RAM. Twiddles: each multiplier has its own table,
+  W_L^e for e < 3L/4 (1536, 384, 96, 24 and 6 entries of 2 × 18 bits,
+  `fpga/rtl/gen/pfb_tw_*.mem`); a shared quarter-wave table would save
+  about 2 BRAM36 more.
 * **Output order:** bit-reversed. The split stage needs X[k] and
   X[n − k] together anyway, so one frame buffer (2048 × 50 bits,
   double-buffered: about 6 BRAM36) does the reorder and the pairing. The
-  bin selector and the power accumulator then see natural order.
+  bin selector and the power accumulator then see natural order. The
+  split drops bin n (Nyquist), so it gives one bin per clock.
 * **Rounding** (the fixed-point model's `FftArch::Radix22`, which is
   the bit-exact reference): every butterfly output gets the stage's
   rounded halving if it has one (stages 1–4 and 8–11), then saturates;
@@ -358,19 +370,25 @@ flowchart LR
   for a −1 dBFS tone and 29.6 dB for eight tones (radix-2: 23.8 / 28.3),
   with no saturation: the same floor, +0.02 dB.
 * **Polyphase FIR:** 4096 branch sums per 2048 samples is two per clock,
-  each T taps: 2T multiply-accumulates per clock (**22 DSP** at T = 11,
-  24 at T = 12). The history is T banks of 4096 × 16 bit, each read
-  twice per clock (both BRAM ports), written once per clock in turn.
+  each T taps: 2T multiply-accumulates per clock (**22 DSP** at T = 11).
+  The history is 2T + 1 = 23 banks of one half-block (2048 samples, two
+  per 32-bit word: one BRAM36 each), in rotation: 22 read, one written.
+  For a frame every bank reads the same word, and each tap picks its
+  bank through a mux. The products are summed in a registered pairwise
+  tree. Coefficients: 6 ROMs, taps t and T − 1 − t sharing one through
+  its two ports (the prototype is symmetric).
 * **Not Xilinx FFT IP:** the design stays our own GPL RTL, simulated
   with Icarus against the model, like the rest of `fpga/`.
 
 **Test vectors:** `cargo run --release -p web888-dsp --example
 pfbvectors -- DIR [FRAMES]` (server repo) writes `$readmemh` files from
-the model: the ADC input, coefficients, twiddles, and per frame the
-FFT input, its bit-reversed output and the bins. Each Verilog block is
-checked bit for bit against them: the FFT on `packed.hex` → `fft.hex`,
-the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
-`adc.hex` + `coefs.hex` → `packed.hex`, and the whole chain.
+the model: the ADC input and per frame the FFT input, its bit-reversed
+output and the bins (`fpga/sim/vectors`), and the ROM tables
+(coefficients, twiddles: `fpga/rtl/gen/pfb_*.mem`). Each Verilog block
+is checked bit for bit against them: the FFT on `packed.hex` →
+`fft.hex`, the split on `fft.hex` → `bins.hex`, the polyphase FIR on
+`adc.hex` → `packed.hex`, and the whole chain on `adc.hex` → `bins.hex`
+(`make sim-fft sim-split sim-fir sim-chain`).
 
 ## 4. Server side
 
@@ -405,8 +423,7 @@ the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
    selector, ring DMA; simulated (Icarus/Verilator) against the
    fixed-point vectors; synthesis in CI for resources and timing.
    * R2²SDF FFT (`fpga/rtl/fft/`, `make sim-fft`): bit-exact to the
-     model on two frames ✓ (2026-10-28). Its twiddle stages still read
-     the whole table; per-stage / quarter-wave ROMs come with synthesis.
+     model on two frames ✓ (2026-10-28), with per-stage twiddle ROMs.
    * Split stage (`pfb_split.v`, `make sim-split`): bit-exact ✓. It
      drops bin N (Nyquist: real, half of it above fs/2), so a frame of
      2048 clocks gives exactly 2048 bins, one per clock.
@@ -423,7 +440,7 @@ the split on `fft.hex` → `bins.hex`, then the polyphase FIR on
    * BRAM estimate, before synthesis: history 23, coefficients 18 (2K ×
      40 bits takes 3 BRAM36), split buffer ~6, FFT delay lines ~4,
      twiddles ~3: ~54 of 60, before the register file and DMA FIFOs.
-     Tight; T = 10 (90 dB) saves 5.
+     Tight; T = 10 (90 dB) saves 5. Measured: 51.5 (next item).
    * First CI run of `make pfb` (out of context, 29c725c): LUT 8440
      (48 %), registers 2551 (7 %), **BRAM 51.5 of 60 (86 %)**; timing
      **WNS −10.07 ns**: the FIR summed its 11 products in one clock (a
