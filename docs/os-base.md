@@ -156,9 +156,10 @@ ROM always loads `BOOT.BIN`, the stock kernel has no kexec.
 under the hardware watchdog.** `BOOT.BIN` and the partition table are
 never touched.
 
-1. From stock Linux, arm the SWDT with its longest timeout (`wdt hang`:
-   through the driver, then left unkicked; about 8 min), reset on
-   expiry.
+1. From stock Linux, set the SWDT's longest timeout (`wdt set 516`:
+   programmed, then stopped); the module starts it right before the
+   shutdown (armed through the driver, the shutdown would stop it: the
+   reboot notifier stops an active watchdog), reset on expiry, unkicked.
 2. A small kernel module for the stock 6.6.110-xilinx kernel (kexec's
    job without kexec, `tools/chainboot`): CPU1 offlined first, our
    zImage, DTB and initramfs in pages outside their destinations, devices
@@ -182,7 +183,7 @@ What the safety net rests on, and how to check it before the first try:
 | a SWDT timeout resets this board and it comes back on stock | **shown** (2026-10-28, `hardware-test-plan.md` §0): `wdt hang 30` and two real AXI hangs, back on stock in about 25 s each time |
 | it can be armed for several minutes, with nothing kicking it, through a jump | `wdt hang` arms it through the driver and leaves it unkicked; the stock driver has no shutdown hook, so nothing stops it. **516 s accepted** and read back on the unit, disarmed cleanly (2026-10-29) |
 | the new kernel doesn't stop or ungate the SWDT before our userspace runs | `cdns_wdt` source; the module's dry run (below) shows the timer still counting after the jump |
-| the module works on the stock kernel | **in the emulator** (`tools/chainboot`, 2026-10-29): built against mainline 6.6.110 + the vendor's public patch and defconfig, with the stock modules' CRCs; on the unit's own `boot.bin` the dry run loads and frees cleanly, and `go` boots the stock kernel again (all RAM, both CPUs, initramfs, the stock server streaming). **Dry run on the unit passed** (2026-10-29, watchdog armed unkicked for 300 s during it: loads, reads the images, frees, kernel tainted only as out-of-tree, web888d unaffected). Next: chain-loading the **stock** kernel itself (failure: watchdog reset to stock) |
+| the module works on the stock kernel | **in the emulator** (`tools/chainboot`, 2026-10-29): built against mainline 6.6.110 + the vendor's public patch and defconfig, with the stock modules' CRCs; on the unit's own `boot.bin` the dry run loads and frees cleanly, and `go` boots the stock kernel again (all RAM, both CPUs, initramfs, the stock server streaming). **Dry run on the unit passed** (2026-10-29, watchdog armed unkicked for 300 s during it: loads, reads the images, frees, kernel tainted only as out-of-tree, web888d unaffected). **Chain-loading the stock kernel on the unit worked** (2026-10-29: back in about a minute with `chainboot=1`), but the watchdog was off afterwards: the shutdown's reboot notifier had stopped it. Fixed (the module starts it itself); to repeat, checking it runs after the jump |
 | our image mounts the FAT read-only | image config, checked in the emulator |
 
 What would still need hands on site: a hardware state that survives a

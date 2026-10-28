@@ -94,6 +94,16 @@ void _start_c(long *sp)
     gpio(fd, n);
     sys6(SYS_exit, 0, 0, 0, 0, 0, 0);
   }
+  if (argc >= 2 && eq(argv[1], "swdt")) {
+    // the system watchdog (ZMR bit 0: enabled) and the last reset's cause
+    volatile u32 *w = map(fd, 0xF8005000u);
+    volatile u32 *sl = map(fd, 0xF8000000u);
+    out("0xf8005000 = "); hex(w[0]); out("  SWDT ZMR (bit 0 = running)\n");
+    out("0xf8005004 = "); hex(w[1]); out("  SWDT CCR\n");
+    out("0xf800500c = "); hex(w[3]); out("  SWDT STS (bit 0 = expired)\n");
+    out("0xf8000258 = "); hex(sl[0x258 / 4]); out("  REBOOT_STATUS\n");
+    sys6(SYS_exit, 0, 0, 0, 0, 0, 0);
+  }
   // SLCR at 0xF8000000; mmap2 takes the offset in 4 KiB pages
   volatile u32 *slcr = map(fd, 0xF8000000u);
   static const struct { u32 off; const char *name; } regs[] = {

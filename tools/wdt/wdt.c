@@ -8,6 +8,9 @@
 //   wdt keep TIMEOUT [SECONDS]  arm with TIMEOUT s and kick every TIMEOUT/4 s;
 //                               stop when SECONDS have passed (0: never) or
 //                               /tmp/wdt.stop exists, then disarm (magic close)
+//   wdt set TIMEOUT             program TIMEOUT, then disarm: the hardware
+//                               keeps it in its counter register, stopped
+//                               (for chainboot, which starts it itself)
 //   wdt hang TIMEOUT            arm, kick once, then stop kicking: the board
 //                               resets after TIMEOUT s (simulates a hang)
 //
@@ -136,7 +139,7 @@ void _start_c(long *sp)
   int argc = (int)sp[0];
   char **argv = (char **)(sp + 1);
   if (argc < 2) {
-    out("usage: wdt info | keep TIMEOUT [SECONDS] | hang TIMEOUT\n");
+    out("usage: wdt info | keep TIMEOUT [SECONDS] | set TIMEOUT | hang TIMEOUT\n");
     sys3(SYS_exit, 2, 0, 0);
   }
   if (eq(argv[1], "info")) {
@@ -177,6 +180,8 @@ void _start_c(long *sp)
       sleep_s(step);
     }
     disarm(fd);
+  } else if (eq(argv[1], "set") && argc >= 3) {
+    disarm(arm(atoi_(argv[2])));
   } else if (eq(argv[1], "hang") && argc >= 3) {
     long timeout = atoi_(argv[2]);
     arm(timeout);

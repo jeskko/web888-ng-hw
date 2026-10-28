@@ -7,10 +7,21 @@ remotely"): the hardware watchdog armed first, a new kernel that never
 takes over ends in a reset, and the boot ROM starts the stock `BOOT.BIN`.
 
 ```sh
-wdt hang 516                     # (tools/wdt) armed, not kicked: ~8.5 min
+wdt set 516                      # (tools/wdt) the timeout, left stopped
 chainboot.sh ZIMAGE DTB INITRD   # dry run: prepared, checked, freed
 chainboot.sh ZIMAGE DTB INITRD go
 ```
+
+* **The watchdog**: the module starts it itself, just before the
+  shutdown, from the timeout `wdt set` left in its counter register, and
+  nothing kicks it. Armed through the driver instead (`wdt hang`), it
+  would be stopped by the shutdown: the watchdog core's reboot notifier
+  stops an active watchdog on `SYS_DOWN`, and `SYS_RESTART` is
+  `SYS_DOWN`. The first chain-load on the unit (2026-10-29) ran like that,
+  without the safety net from the shutdown on (it worked). The module
+  refuses without a long timeout set (prescaler 4096, about 5 min or
+  more), or while the watchdog runs; `nowdt=1` skips it (the emulator has
+  no watchdog). The driver's probe leaves a running watchdog alone.
 
 * `chainboot.sh` takes the addresses of `soft_restart`,
   `kernel_restart_prepare` and `kernel_read_file_from_path_initns` from
@@ -50,7 +61,11 @@ run loads on the stock kernel and frees everything; `go` boots the stock
 kernel again with a marked command line, all 512 MB, both CPUs, the
 initramfs, the modloop, and the stock server streaming.
 
-On the production unit, 2026-10-29: the dry run (watchdog armed, not
+On the production unit, 2026-10-29: chain-loading the stock kernel
+worked (back in about a minute, `chainboot=1` in `/proc/cmdline`, all
+RAM, both CPUs, the stock server), but the watchdog was found stopped
+afterwards (above). With the fix, `wdt set 516` and the dry run read the
+timeout back (CCR 0x356b) and pass the check. Earlier the dry run (watchdog armed, not
 kicked, for 300 s around it) loads, reads the images, frees them; only
 the out-of-tree taint; web888d went on undisturbed. BusyBox `insmod`
 runs a failing init twice (`finit_module`, then `init_module`): harmless

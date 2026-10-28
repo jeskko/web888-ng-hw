@@ -21,8 +21,15 @@
  * With go=1: devices are shut down as for a reboot, and soft_restart
  * (MMU, caches and the L2 off) runs a copy of reloc.S from a page of its
  * own, which copies every page to its place and enters the new kernel.
- * The hardware watchdog is not touched: armed beforehand, it resets the
- * board if the new kernel never takes over.
+ *
+ * The module starts the hardware watchdog itself, just before the
+ * shutdown, from the timeout `wdt set 516` left in its counter register
+ * (the driver then counts it as stopped, so the watchdog core's reboot
+ * notifier, which stops an active one, leaves it running). Nothing kicks
+ * it: it resets the board unless the new kernel's userspace takes it over
+ * (the driver's probe leaves a running watchdog alone). It refuses
+ * without a long timeout there (prescaler 4096, at least about 5 min);
+ * nowdt=1 skips the watchdog (the emulator has none).
  */
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -31,13 +38,14 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/kernel_read_file.h>
+#include <linux/io.h>
 #include <asm/memory.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("start another kernel without kexec");
 
 static char *zimage, *dtb, *initrd, *restart, *prepare, *readfile;
-static int go;
+static int go, nowdt;
 module_param(zimage, charp, 0);
 module_param(dtb, charp, 0);
 module_param(initrd, charp, 0);
@@ -45,6 +53,21 @@ module_param(restart, charp, 0);
 module_param(prepare, charp, 0);
 module_param(readfile, charp, 0);
 module_param(go, int, 0);
+module_param(nowdt, int, 0);
+
+/* the system watchdog (Cadence): registers, keys and bits */
+#define SWDT_BASE    0xf8005000u
+#define SWDT_ZMR     0x0
+#define SWDT_CCR     0x4
+#define SWDT_RESTART 0x8
+#define ZMR_KEY      0x00abc000u
+#define ZMR_WDEN     0x1u
+#define ZMR_RSTEN    0x2u
+#define CCR_KEY      0x00920000u
+#define RESTART_KEY  0x1999u
+#define ZMR_RSTLEN_16 0x30u
+/* counter restart value for about 5 min at 111 MHz / 4096 / 4096 */
+#define CRV_MIN      0x7c0u
 
 #define DTB_AT    0x01f00000u
 #define ZIMAGE_AT 0x02000000u
@@ -158,6 +181,8 @@ static int parse_addr(const char *s, unsigned long *a)
 static int __init chainboot_init(void)
 {
 	unsigned long a_restart, a_prepare, a_readfile, stub;
+	void __iomem *wdt = NULL;
+	u32 zmr, ccr;
 	u32 *list, *head;
 	unsigned int npages = 0, k = 0, i;
 	readfile_fn rf;
@@ -248,18 +273,45 @@ static int __init chainboot_init(void)
 	pr_info("chainboot: %u pages, %u refused; list at %#x, code at %#x\n",
 		npages, refused.n, (u32)virt_to_phys(head), (u32)virt_to_phys((void *)stub));
 
+	/* the watchdog's timeout as `wdt set` left it */
+	wdt = ioremap(SWDT_BASE, 0x1000);
+	if (!wdt)
+		goto out;
+	zmr = readl(wdt + SWDT_ZMR) & 0xfff;
+	ccr = readl(wdt + SWDT_CCR) & 0x3fff;
+	pr_info("chainboot: watchdog ZMR %#x CCR %#x\n", zmr, ccr);
+	if (!nowdt && ((ccr & 3) != 3 || (ccr >> 2) < CRV_MIN)) {
+		pr_err("chainboot: no long watchdog timeout set (wdt set 516), or nowdt=1\n");
+		err = -EPERM;
+		goto out;
+	}
+	if (!nowdt && (zmr & ZMR_WDEN)) {
+		pr_err("chainboot: the watchdog runs: disarm it (wdt set 516 does)\n");
+		err = -EBUSY;
+		goto out;
+	}
+
 	if (go != 1) {
 		pr_info("chainboot: dry run, nothing started\n");
 		err = -EAGAIN;
 		goto out;
 	}
 
-	pr_emerg("chainboot: shutting down, then starting the new kernel\n");
+	if (!nowdt) {
+		/* running, reset on timeout, counting from now */
+		writel(ZMR_KEY, wdt + SWDT_ZMR);
+		writel(CCR_KEY | ccr, wdt + SWDT_CCR);
+		writel(ZMR_KEY | ZMR_RSTLEN_16 | ZMR_RSTEN | ZMR_WDEN, wdt + SWDT_ZMR);
+		writel(RESTART_KEY, wdt + SWDT_RESTART);
+	}
+	pr_emerg("chainboot: watchdog started; shutting down, then starting the new kernel\n");
 	((prepare_fn)a_prepare)("chainboot");
 	((restart_fn)a_restart)(virt_to_phys((void *)stub));
 	return -EIO; /* not reached */
 
 out:
+	if (wdt)
+		iounmap(wdt);
 	for (i = 0; i < 3; i++)
 		if (imgs[i].data && imgs[i].data != (void *)1)
 			vfree(imgs[i].data);
