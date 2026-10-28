@@ -461,6 +461,10 @@ is checked bit for bit against them: the FFT on `packed.hex` →
      are inside its loop); for D ≤ 32 the input and the differences get a
      shift register each, so the D = 1 stage pipelines too. Still
      bit-exact.
+   * Fourth run (bc36069): **timing met, WNS +0.064 ns** at 122.88 MHz
+     with the 0.4 ns guardband; BRAM 51.5 of 60, LUT 7764 (44 %). The
+     channelizer datapath is ready for a test build with the register
+     file and DMA around it.
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air
