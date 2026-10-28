@@ -133,8 +133,9 @@ enables it.
 1. devcfg load: exit 0. SLCR as before.
 2. The first PL reads answer: signature `0x0E5D020C`, DNA read.
 3. web888d (`bitstream = "none"`, stock zynqsdr driver): RX at 48.1 k
-   frames/s, `hw_rate_ok`, no ADC overloads. FT8 decodes on 30 m and 20 m
-   in the first slot, the same as on the stock bitstream.
+   frames/s, `hw_rate_ok`, no ADC overloads. FT8 on 40/30/20 m decodes
+   every slot, about 45/25/30 a slot (about 90 in all on the stock
+   bitstream earlier the same day).
 
 ## 1. Prepare a stock SD card
 
