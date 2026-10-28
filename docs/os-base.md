@@ -128,15 +128,22 @@ then only needed for what the emulator can't model.
 1. `meta-web888` layer + `kas` config: machine `web888` (Zynq-7010, our
    DT, U-Boot with redundant env), 6.18 LTS kernel with `fpga_manager`,
    image recipe with a squashfs root, our packages (`web888d`, bitstream).
+   **Done** (web888-ng-os; still the vendor-derived DT and no boot files
+   for the real board).
 2. Boot it in the emulator against `web888-pl`. The stock `zynqsdr` driver
    is built into the vendor kernel and is not available on ours, so radio
-   access on this image needs the open kernel driver.
-3. RAUC A/B + config partition; power-loss tests in the emulator.
-4. CI on the self-hosted runner builds the image; the Vivado bitstream
-   comes in as an artifact.
+   access on this image needs the open kernel driver. **Done**: the open
+   driver (`driver/`) loads, and web888d serves HPSDR through it.
+3. RAUC A/B + config partition; power-loss tests in the emulator. The
+   configuration partition is done; RAUC A/B and the power-loss tests
+   are not.
+4. CI on the self-hosted runner builds the image. **Done**; the bitstream
+   comes from a web888-ng-hw release (recipe `web888-bitstream`, checked
+   by SHA-256).
 
-Until the open kernel driver exists, the vendor kernel (with the stock
-driver) stays in use, as planned.
+The open driver works in the emulator but is untested on hardware. Until
+it is, units run the vendor firmware, with web888d on it where wanted (as
+on the production unit since 2026-10-28; `hardware-test-plan.md`).
 
 ## Not verified
 
