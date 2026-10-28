@@ -156,9 +156,9 @@ ROM always loads `BOOT.BIN`, the stock kernel has no kexec.
 under the hardware watchdog.** `BOOT.BIN` and the partition table are
 never touched.
 
-1. From stock Linux, arm the SWDT through its registers (not the driver:
-   then nothing kicks it), with its longest timeout (about 10 min), reset
-   on expiry.
+1. From stock Linux, arm the SWDT with its longest timeout (`wdt hang`:
+   through the driver, then left unkicked; about 8 min), reset on
+   expiry.
 2. A small kernel module for the stock 6.6.110-xilinx kernel (kexec's
    job without kexec): CPU1 offlined first, our zImage, DTB and initramfs
    in a CMA buffer, caches flushed, MMU off, jump.
@@ -178,15 +178,15 @@ What the safety net rests on, and how to check it before the first try:
 
 | assumption | check |
 |---|---|
-| a SWDT timeout resets this board and it comes back on stock | arm it for 60 s from stock Linux and let it fire (a reboot; needs the user's go-ahead) |
+| a SWDT timeout resets this board and it comes back on stock | **shown** (2026-10-28, `hardware-test-plan.md` §0): `wdt hang 30` and two real AXI hangs, back on stock in about 25 s each time |
+| it can be armed for several minutes, with nothing kicking it, through a jump | `wdt hang` arms it through the driver and leaves it unkicked; the stock driver has no shutdown hook, so nothing stops it. The longest timeout the driver takes (516 s expected): set it, read it back, disarm with the magic close (no reset) |
 | the new kernel doesn't stop or ungate the SWDT before our userspace runs | `cdns_wdt` source; the module's dry run (below) shows the timer still counting after the jump |
 | the module works on the stock kernel (no headers or config shipped: built against linux-xlnx 6.6.110 with a matching config; vermagic from the stock modules) | QEMU with the stock kernel, DTB and initrd from `boot.bin`; then on the unit, a dry run chain-loading the **stock** kernel itself (failure: watchdog reset to stock) |
 | our image mounts the FAT read-only | image config, checked in the emulator |
 
-What would still need hands on site: the watchdog not resetting the
-board after all (step 1 of the checks finds that out with a stock
-reboot's risk), or a hardware state that survives a watchdog reset but
-not a power cycle.
+What would still need hands on site: a hardware state that survives a
+watchdog reset but not a power cycle (none seen in the three resets so
+far).
 
 ## Not verified
 
