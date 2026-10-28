@@ -451,6 +451,16 @@ is checked bit for bit against them: the FFT on `packed.hex` →
      11.5–12 ns). Those and the split's multiply are now pipelined one
      carry chain per clock (twiddle stages 5 clocks, split 8); still
      bit-exact. Same BRAM (51.5) and LUTs (8513).
+   * Third run (54a1220): **WNS −2.72 ns**, now the butterflies: the
+     exact sum, the rounded halving and the saturation compare were three
+     carry chains in one clock (plus the −j negation in the BF2II stages
+     and the BRAM's 2.45 ns clock-to-out on the delay-line loop). Now four
+     clocks per butterfly: the input, the exact sums, the halving, then a
+     saturation on the top three bits (no compare) and the output select.
+     For D > 32 the feedback delay line is two shorter (the two registers
+     are inside its loop); for D ≤ 32 the input and the differences get a
+     shift register each, so the D = 1 stage pipelines too. Still
+     bit-exact.
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
 5. **On the test unit**: noise floor, spurs, alias rejection on the air

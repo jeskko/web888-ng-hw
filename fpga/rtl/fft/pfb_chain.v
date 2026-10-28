@@ -53,9 +53,9 @@ module pfb_chain #(
 
   // frame starts on both sides of the FFT
   reg [LOGN-1:0] f_prev = LAST, z_prev = LAST;
-  reg [6:0]      boot = 0;
+  reg [8:0]      boot = 0;
   wire push = (f_idx == 0) && (f_prev == LAST);
-  wire pop  = (z_idx == 0) && (z_prev == LAST) && boot[6];
+  wire pop  = (z_idx == 0) && (z_prev == LAST) && boot[8];
 
   // the queue of {valid, odd}: q[0] oldest
   reg [1:0] q [0:1];
@@ -68,7 +68,7 @@ module pfb_chain #(
     if (ce) begin
       f_prev <= f_idx;
       z_prev <= z_idx;
-      if (!boot[6]) boot <= boot + 1'b1;
+      if (!boot[8]) boot <= boot + 1'b1;
       if (pop) cur <= head;
       case ({push, pop})
         2'b10: begin q[n[0]] <= {f_valid, f_odd}; n <= n + 1'b1; end
