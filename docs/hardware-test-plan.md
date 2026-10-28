@@ -136,6 +136,10 @@ enables it.
    frames/s, `hw_rate_ok`, no ADC overloads. FT8 on 40/30/20 m decodes
    every slot, about 45/25/30 a slot (about 90 in all on the stock
    bitstream earlier the same day).
+4. Kept running (2026-10-28, about an hour from 17:07 UTC, web888d on
+   port 8073 behind the public HTTPS front end): FT8 on eight bands, then FT8 ×5, FT4 ×2
+   and WSPR ×3, web users on the waterfall and audio. No hang, no rate
+   warnings. Released as v0.2.0.
 
 ## 1. Prepare a stock SD card
 

@@ -80,6 +80,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          sparse-checkout: docs/release-notes
       - uses: actions/download-artifact@v4
         with:
           name: bitstreams
@@ -97,7 +101,12 @@ jobs:
             echo "* \`SHA256SUMS\`, timing and utilization reports"
             echo
             sed 's/^/Timing (with guardband): /' out/wns.txt
-            if [ -n "$pre" ]; then
+            # what's new and how it was tested, if written down for this tag
+            notes="src/docs/release-notes/$GITHUB_REF_NAME.md"
+            if [ -f "$notes" ]; then
+              echo
+              cat "$notes"
+            elif [ -n "$pre" ]; then
               echo
               echo "**Pre-release: not yet tested on hardware.** Simulation and timing only. Follow \`docs/hardware-test-plan.md\` before using it on a unit you can't power-cycle."
             fi
