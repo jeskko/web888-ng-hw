@@ -48,4 +48,10 @@ make KDIR=/path/to/linux-6.6.110 SYMVERS=$PWD/stock.symvers
 In the emulator (`emu/`, the unit's own `boot.bin`), 2026-10-29: the dry
 run loads on the stock kernel and frees everything; `go` boots the stock
 kernel again with a marked command line, all 512 MB, both CPUs, the
-initramfs, the modloop, and the stock server streaming. Not yet on a unit.
+initramfs, the modloop, and the stock server streaming.
+
+On the production unit, 2026-10-29: the dry run (watchdog armed, not
+kicked, for 300 s around it) loads, reads the images, frees them; only
+the out-of-tree taint; web888d went on undisturbed. BusyBox `insmod`
+runs a failing init twice (`finit_module`, then `init_module`): harmless
+for the dry run's `-EAGAIN`; with `go` the first never returns.
