@@ -2,3 +2,4 @@
 /tools/wdt/wdt
 __pycache__/
 /tools/slcr-peek/slcr_peek
+/tools/physmem/physmem
