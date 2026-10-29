@@ -473,6 +473,13 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   LUT 87.5 % (synthesis), BRAM 56.5 of 60, LUT RAM 1855; WNS −0.316 ns
   against the 7.6 ns guarded constraint (+0.22 ns against 8.138 ns), the
   worst path a FIR bank's block RAM into a DSP.
+* **Timing closed** (hw c9401b0, CI 40919658723): the FIR's RAM and ROM
+  outputs registered twice (−0.316 → −0.194 ns), then the FFT's twiddle
+  exponent registered before the table, the selector's mask bits
+  registered with the bin, and `cfg_r` started from its initial value
+  instead of `rst`'s fan-out. WNS +0.058 ns with the guardband (the ADC
+  input pins, as in the stock HF build; the worst internal path +0.065
+  ns, in the tuner); LUT 83.8 %, BRAM 56.5 of 60. Not yet on the unit.
 * **On the unit** (2026-10-29, `private/tune-test-kit`): 32 users at
   12 kS/s, FT8 decodes, 20 mixed-view web sessions + 2 skimmers clean
   (server `doc/m6-channelizer.md` §6). A ring restart mid-pass first
