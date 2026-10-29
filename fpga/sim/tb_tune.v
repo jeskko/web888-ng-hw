@@ -6,7 +6,8 @@
 // scripts/tune_model.py (bit-exact). Users cover bin 0 and 2047, the
 // rounding edges at +-15 kHz, a bin centre, users sharing a bin, a
 // disabled one, a bin driven to saturation. `run` rises after the first
-// pass: that pass must not come out.
+// pass: that pass must not come out. A `run` dropout in the middle of a
+// pass (a ring restart) must cut no frame: output comes in whole frames.
 
 module tb_tune;
 
@@ -80,6 +81,10 @@ module tb_tune;
       if (n == 6) run <= 1;
       for (j = 0; j < 2048; j = j + 1) begin
         @(posedge clk) begin
+          // a restart: the pass of frame 154 is emitting from its frame
+          // end + ~40 clocks for 3840 clocks
+          if (n == 155 && j == 1000) run <= 0;
+          if (n == 155 && j == 1003) run <= 1;
           valid <= 1;
           k     <= j;
           re    <= val(j, n, 0);
@@ -94,7 +99,11 @@ module tb_tune;
     repeat (20000) @(posedge clk);
     $fclose(fin);
     $fclose(fout);
-    if (words % NU != 0 || words < NU * 50) begin
+    if (cut != 1 || words < NU * 50) begin
+      $display("tb_tune: FAILED, %0d words out, %0d frames cut (1 due)", words, cut);
+      $finish;
+    end
+    if (words % NU != 0) begin
       $display("tb_tune: FAILED, %0d words out", words);
       $finish;
     end
@@ -103,12 +112,32 @@ module tb_tune;
     $finish;
   end
 
+  // whole frames of one ring session: a restart (`run` low) ends the
+  // session, and what it had of a frame went to the old ring
+  reg [63:0] fbuf [0:NU-1];
+  integer fw = 0, cut = 0;
   initial words = 0;
-  always @(posedge clk)
-    if (m_valid) begin
-      if (words % NU == 0) $fwrite(fout, "O %0d\n", m_frame);
-      $fwrite(fout, "%0d %0d\n", $signed(m_data[31:0]), $signed(m_data[63:32]));
-      words = words + 1;
+  always @(posedge clk) begin
+    if (!run && fw != 0) begin
+      cut = cut + 1;
+      fw = 0;
     end
+    if (m_valid) begin
+      if (!run) begin
+        $display("tb_tune: FAILED, a word out while the ring is stopped");
+        $finish;
+      end
+      fbuf[fw] = m_data;
+      fw = fw + 1;
+      if (fw == NU) begin
+        $fwrite(fout, "O %0d\n", m_frame);
+        for (j2 = 0; j2 < NU; j2 = j2 + 1)
+          $fwrite(fout, "%0d %0d\n", $signed(fbuf[j2][31:0]), $signed(fbuf[j2][63:32]));
+        words = words + NU;
+        fw = 0;
+      end
+    end
+  end
+  integer j2;
 
 endmodule

@@ -269,7 +269,11 @@ module pfb_tune #(
   reg          b_busy = 1'b0, b_emit = 1'b0;
   reg [UW-1:0] b_u = 0;
   reg [6:0]    b_j = 7'd0, b_slot = 7'd0;
+  // b_emit: the ring was running when the pass began and has been since
+  // (a restart mid-pass must not leave the ring a part-frame off: the RX
+  // ring has no headers to realign on)
   always @(posedge clk) begin
+    if (!run) b_emit <= 1'b0;
     if (a_done && a_m5 == 3'd4 && !b_busy) begin
       b_busy  <= 1'b1;
       b_u     <= 0;
