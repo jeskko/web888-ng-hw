@@ -43,7 +43,7 @@
 #define CFG_PHYS	0x40000000
 #define STS_PHYS	0x41000000
 #define PPS_PHYS	0x42000000
-#define EV_PHYS		0x43000000	/* write events: the channelizer's mask */
+#define EV_PHYS		0x43000000	/* write events: the channelizer's mask, the tuner */
 
 /*
  * Zynq-7000 SLCR, read only here: PS-PL level shifters and fabric resets.
@@ -60,7 +60,9 @@
 #define CFG_SIZE	0xb4	/* stock 0xa0; 0xa0.. the channelizer's */
 #define STS_SIZE	0x58	/* stock maps 0x18; 0x18.. are extensions */
 #define PPS_SIZE	0x1000
-#define EV_SIZE		0x100
+#define EV_SIZE		0x200
+#define EV_TUNE		64	/* the tuner's words: 64 + 2u (low), 65 + 2u (high) */
+#define TUNE_R2		40	/* the tuner's rate: 12 kS/s, as R2 = 40 */
 
 /* CFG */
 #define CFG_CTRL	0x00
@@ -548,7 +550,9 @@ static int pl_attach(struct zsdr *z)
 
 	sig = sts_r32(z, STS_SIG);
 	pfb = (sig >> 16) == SIG_OPEN && SIG_PFB(sig) == 1;
-	z->nrx = sig & 0xf;
+	/* the channelizer's RX channels are its tuner's users, bits [7:4] in
+	 * signature [15:12] (0: no tuner) */
+	z->nrx = (sig & 0xf) | (pfb ? (sig >> 8) & 0xf0 : 0);
 	if (pfb && (z->cfg_len < CFG_SIZE || z->sts_len < STS_SIZE)) {
 		dev_warn_ratelimited(z->dev,
 			"channelizer bitstream, but the DT maps CFG 0x%llx / STS 0x%llx bytes (needs 0x%x / 0x%x)\n",
@@ -562,8 +566,8 @@ static int pl_attach(struct zsdr *z)
 	}
 	if (sig != z->signature) {
 		if (pfb)
-			dev_info(z->dev, "signature 0x%08x (channelizer bitstream)\n",
-				 sig);
+			dev_info(z->dev, "signature 0x%08x (channelizer bitstream), %u tuner users\n",
+				 sig, z->nrx);
 		else
 			dev_info(z->dev, "signature 0x%08x (%s bitstream), %u RX channels\n",
 				 sig, (sig >> 16) == SIG_OPEN ? "open" : "stock",
@@ -574,12 +578,15 @@ static int pl_attach(struct zsdr *z)
 	z->pfb = pfb;
 	z->build_id = z->ext ? sts_r32(z, STS_BUILD) : 0;
 
-	/* the channelizer's rings use RX's and WF0's interrupt lines */
+	/* the channelizer's rings use RX's and WF0's interrupt lines, its
+	 * tuner (the RX of that build) WF1's */
 	for (i = 0; i < NSTREAMS; i++)
 		z->s[i].irq = -ENXIO;
 	if (pfb) {
 		z->s[S_BINS].irq = z->irqs[0];
 		z->s[S_PW].irq = z->irqs[1];
+		if (z->nrx)
+			z->s[S_RX].irq = z->irqs[2];
 	} else {
 		for (i = 0; i <= S_WF(1); i++)
 			z->s[i].irq = z->irqs[i];
@@ -788,6 +795,10 @@ static long zsdr_ioctl_locked(struct zsdr *z, unsigned int cmd,
 
 	switch (cmd) {
 	case ZSDR_RX_START: case ZSDR_RX_PARAM: case ZSDR_RX_READ:
+		/* the channelizer's RX is its tuner, if it has one */
+		if (z->pfb && !z->nrx)
+			return -EOPNOTSUPP;
+		break;
 	case ZSDR_WF_START: case ZSDR_WF_PARAM: case ZSDR_WF_READ:
 		if (z->pfb)
 			return -EOPNOTSUPP;
@@ -821,6 +832,8 @@ static long zsdr_ioctl_locked(struct zsdr *z, unsigned int cmd,
 	case ZSDR_RX_START:
 		if (arg < 5 || arg > (z->ext ? 63 : 40))
 			return -EINVAL;
+		if (z->pfb && arg != TUNE_R2)
+			return -EINVAL;	/* the tuner runs at 12 kS/s only */
 		ctrl_clear(z, CTRL_RX);
 		cfg_w16(z, CFG_R2, arg);
 		stream_program(z, S_RX);
@@ -836,6 +849,17 @@ static long zsdr_ioctl_locked(struct zsdr *z, unsigned int cmd,
 			return -EFAULT;
 		if (p.channel >= z->nrx)
 			return -EINVAL;
+		if (z->pfb) {
+			/* the tuner: the low word, then {enable, high 16 bits},
+			 * which commits; frequency 0 disables the user */
+			u32 hi = (p.freq >> 32) & 0xffff;
+
+			writel(lower_32_bits(p.freq),
+			       z->ev + 4 * (EV_TUNE + 2 * p.channel));
+			writel(hi | (p.freq ? BIT(31) : 0),
+			       z->ev + 4 * (EV_TUNE + 2 * p.channel + 1));
+			return 0;
+		}
 		cfg_w64(z, CFG_RX_NCO(p.channel), p.freq);
 		return 0;
 	}
