@@ -126,8 +126,13 @@ set_property top system_wrapper [current_fileset]
 # ---------------------------------------------------------------- synthesise
 # first on its own: a per-module utilisation report even if placement
 # fails (a resource over-used)
-# every block RAM tile is the synthesis' to use (the channelizer needs most)
-set_property STEPS.SYNTH_DESIGN.ARGS.MORE_OPTIONS {-max_bram 60} [get_runs synth_1]
+# the channelizer: the block design synthesised as one (not the core out
+# of context), every block RAM tile the synthesis' to use (it needs most)
+if {$pfb} {
+  set_property synth_checkpoint_mode None [get_files system.bd]
+  set_property -name {STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS} -value {-max_bram 60} \
+    -objects [get_runs synth_1]
+}
 launch_runs synth_1 -jobs $jobs
 wait_on_run synth_1
 if {[get_property PROGRESS [get_runs synth_1]] ne "100%"} {
