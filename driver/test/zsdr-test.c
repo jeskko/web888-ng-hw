@@ -18,6 +18,10 @@
  *                         it after a load (level shifters on, fabric resets
  *                         released), for the driver's PL readiness check
  *
+ * On exit the front end is web888d's default (attenuator code 0, HF path,
+ * internal ADC clock): CLK_SET 0 would leave a board on the external clock
+ * input, which without a reference runs the ADC at ~188 MHz.
+ *
  * With the channelizer bitstream (signature 0x0E5D0010) the RX/WF checks
  * are replaced by the ZSDR_PFB_* ones, on whatever the antenna gives: the
  * power line's strongest bin must stand out in the bins stream too.
@@ -131,7 +135,7 @@ static void t_basic(void)
 	CHECK(ioctl(fd, ZSDR_AD8370_SET, 0x2a) == 0, "AD8370_SET 0x2a");
 	CHECK(ioctl(fd, ZSDR_MODE_SET, 1) == 0 && ioctl(fd, ZSDR_MODE_SET, 0) == 0,
 	      "MODE_SET 1, 0");
-	CHECK(ioctl(fd, ZSDR_CLK_SET, 0) == 0, "CLK_SET 0");
+	CHECK(ioctl(fd, ZSDR_CLK_SET, 1) == 0, "CLK_SET 1 (internal clock)");
 
 	fd2 = open("/dev/zynqsdr", O_RDWR);
 	CHECK(fd2 < 0 && errno == EBUSY, "second open: EBUSY");
@@ -723,6 +727,19 @@ static long pfb_parse_power(float *line, long *bad)
 	return lines;
 }
 
+static int cmp_int(const void *a, const void *b)
+{
+	return *(const int *)a - *(const int *)b;
+}
+
+/* web888d's default front end */
+static void front_end_default(void)
+{
+	ioctl(fd, ZSDR_AD8370_SET, 0);
+	ioctl(fd, ZSDR_MODE_SET, 0);
+	ioctl(fd, ZSDR_CLK_SET, 1);
+}
+
 static void t_pfb(void)
 {
 	struct zsdr_pfb_info in = { 0 };
@@ -766,12 +783,14 @@ static void t_pfb(void)
 	      kmax, kmax * 0.03, line[kmax], kmin, line[kmin],
 	      10 * log10(line[kmax] / (line[kmin] > 0 ? line[kmin] : 1e-30)));
 
-	/* bins: the strongest, the weakest and 1000 (gen 1) */
+	/* bins: the strongest, the weakest and one far from both (gen 1); the
+	 * frames carry them in ascending order */
 	sel[0] = kmin < kmax ? kmin : kmax;
 	sel[1] = kmin < kmax ? kmax : kmin;
 	sel[2] = 1000;
-	if (sel[1] == 1000)
-		sel[2] = 1001;
+	while (sel[2] == sel[0] || sel[2] == sel[1])
+		sel[2]++;
+	qsort(sel, 3, sizeof(sel[0]), cmp_int);
 	CHECK(pfb_mask(1, sel, 3) == 0 && pfb_start(ZSDR_PFB_BINS | ZSDR_PFB_POWER, 600) == 0,
 	      "SET_MASK gen 1 (bins %d %d %d), PFB_START bins + power", sel[0], sel[1], sel[2]);
 	pn = 0;
@@ -787,8 +806,14 @@ static void t_pfb(void)
 	}
 	CHECK(frames > 1000 && !gaps, "gen-1 frames %ld, gaps %ld", frames, gaps);
 	{
-		double strong = kmin < kmax ? pw[1] : pw[0];
-		double weak = kmin < kmax ? pw[0] : pw[1];
+		double strong = 0, weak = 0;
+
+		for (i = 0; i < 3; i++) {
+			if (sel[i] == kmax)
+				strong = pw[i];
+			if (sel[i] == kmin)
+				weak = pw[i];
+		}
 
 		CHECK(strong > 10 * weak,
 		      "bins stream: the power line's strongest bin %.1f dB over its weakest",
@@ -835,6 +860,15 @@ static void t_pfb(void)
 	      frames, frames / 2.0, (st.bins_frames - f0) / (now() - t0), gaps,
 	      st.bins_dropped, st.flags,
 	      100 * (cpu_secs(&ru.ru_utime) + cpu_secs(&ru.ru_stime) - cpu0) / 2);
+	{
+		/* frames come at fs / 2048: 60000/s at 122.88 MHz (fs = 30 kHz
+		 * bins x 4096) */
+		double want = in.frame_hz, got = (st.bins_frames - f0) / (now() - t0);
+
+		CHECK(fabs(got / want - 1) < 0.01,
+		      "frame rate %.0f/s (want %.0f: the ADC clock %.2f MHz)",
+		      got, want, got * 2048 / 1e6);
+	}
 	CHECK(pfb_start(0, 0) == 0 && pfb_read(ZSDR_PFB_BINS, b, sizeof(b)) == -EINVAL,
 	      "PFB_START 0: stopped");
 }
@@ -882,6 +916,7 @@ int main(int argc, char **argv)
 	t_basic();
 	if (pfb) {
 		t_pfb();
+		front_end_default();
 		close(fd);
 		printf(failed ? "FAILED\n" : "ALL PASSED\n");
 		return failed;
@@ -896,6 +931,7 @@ int main(int argc, char **argv)
 	t_pps();
 	rx_setup(10);	/* PPS again, with RX data always ready */
 	t_pps();
+	front_end_default();
 	close(fd);
 	printf(failed ? "FAILED\n" : "ALL PASSED\n");
 	return failed;
