@@ -89,8 +89,8 @@ What a bitstream loaded on this firmware finds (read from the PS side:
   MAC):
   - **eth0's MAC**: the DT gives the GEM an nvmem cell, EEPROM 0x10 (6
     bytes, `fixed-layout`, `mac-address`). The kernel's macb takes it if
-    it is a valid unicast address; otherwise the GEM's address registers;
-    otherwise a **random MAC at every boot**. Nothing else sets it: no
+    it is a valid unicast address; otherwise the GEM's address registers
+    (as the FSBL left them); otherwise a random MAC at every boot. Nothing else sets it: no
     init script, no `mactab`, and the Alpine initramfs only reads it.
   - **The FSBL's hook** ("User RedPitaya Bootloader start", run before
     the hand-off): reads EEPROM 0x1800 (1 KB) over I2C at 100 kHz, puts
@@ -101,14 +101,17 @@ What a bitstream loaded on this firmware finds (read from the PS side:
     EEPROM or the Si5351 doesn't answer, the hook fails and the FSBL's
     fallback for SD boot is a loop forever: **the board hangs in the FSBL
     until power-cycled**. Blank contents read fine.
-  - **Blank 0x10** (emulator, stock kernel and server): eth0 got a random
-    MAC; the EEPROM was unchanged after the server had run several
-    minutes (it doesn't repair it). The stock driver's genuine check wants
-    eth0's MAC to match the DNA, so such a unit's server gets zeros
-    (`emu/README.md`). On the board, the GEM registers the FSBL wrote would
-    come before the random MAC: with the factory environment those bytes
-    are `64:69:73:74:72:6f` ("distro"), a valid unicast address
-    *(inference, not seen)*.
+  - **Blank 0x10** (emulator, stock kernel and server): eth0 took the
+    address in the GEM's registers (the emulator preloads the NIC's MAC
+    there, standing in for what the FSBL writes; first misread as random),
+    and the EEPROM was unchanged after the server had run several minutes
+    (it doesn't repair it). On the board those registers hold what the
+    FSBL wrote: with the factory environment `64:69:73:74:72:6f`
+    ("distro", a valid unicast address) *(inference)*; with a blank
+    EEPROM `ff:ff:ff:ff:ff:ff`, invalid, so the kernel makes **a random
+    MAC at every boot**. Either way it isn't the DNA's, so the stock
+    driver's genuine check fails and the server gets zeros
+    (`emu/README.md`).
   - **A bad environment CRC**: `fw_printenv` warns and prints its built-in
     defaults (which start like the unit's environment, so the factory
     likely wrote the board data with `fw_setenv`); the server then has no

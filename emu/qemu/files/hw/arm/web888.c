@@ -27,6 +27,7 @@
 #include "hw/arm/xilinx_zynq.h"
 #include "hw/arm/boot.h"
 #include "target/arm/arm-powerctl.h"
+#include "target/arm/cpu.h"
 #include "hw/arm/web888.h"
 #include "hw/misc/web888_pl.h"
 #include "hw/i2c/cadence_i2c.h"
@@ -72,7 +73,16 @@ static void web888_cpu_reset_line(void *opaque, int n, int level)
         arm_set_cpu_off(n);
         wm->cpu_on[n] = false;
     } else if (!level && !wm->cpu_on[n]) {
-        if (arm_set_cpu_on(n, 0x0, 0, 1, false) ==
+        /*
+         * In CPU0's security state, as the hardware does: a kernel QEMU
+         * booted runs non-secure (EL1), one a boot loader started on the
+         * board's path (--bootrom) secure; a mismatch leaves Linux's
+         * timer interrupts undelivered.
+         */
+        CPUState *cpu0 = qemu_get_cpu(0);
+        int el = cpu0 && arm_is_secure(&ARM_CPU(cpu0)->env) ? 3 : 1;
+
+        if (arm_set_cpu_on(n, 0x0, 0, el, false) ==
             QEMU_ARM_POWERCTL_RET_SUCCESS) {
             wm->cpu_on[n] = true;
         }
