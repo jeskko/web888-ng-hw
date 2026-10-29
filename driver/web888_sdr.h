@@ -93,8 +93,74 @@ struct zsdr_stats {
 #define ZSDR_GET_STATS		_IOR(ZSDR_IOC_TYPE, 0x20, struct zsdr_stats)
 
 /*
- * poll()/select() on /dev/zynqsdr: POLLIN when a running RX or WF stream
- * has new data, POLLPRI when the PPS FIFO is not empty.
+ * The channelizer bitstream (signature 0x0E5D0010, register-map.md "The
+ * channelizer build"): 2048 bins of 30 kHz at 60 kS/s, up to 64 selected
+ * per frame, and a full-band power line. The stock RX/WF ioctls fail with
+ * EOPNOTSUPP there; these fail with ENODEV with any other bitstream.
+ */
+struct zsdr_pfb_info {
+	__u32 size;			/* sizeof(struct zsdr_pfb_info) */
+	__u32 bins;			/* 2048 */
+	__u32 max_selected;		/* 64 */
+	__u32 bin_hz;			/* 30000 at 122.88 MHz */
+	__u32 frame_hz;			/* 60000 */
+	__u32 bins_ring_bytes;
+	__u32 power_ring_bytes;
+};
+
+/*
+ * Bit b of mask[w] selects bin 32w + b (bin 2047 can't be). The next frame
+ * after the call uses it and carries gen (1..15) in its header.
+ */
+struct zsdr_pfb_mask {
+	__u32 gen;
+	__u32 mask[64];
+};
+
+#define ZSDR_PFB_BINS		(1u << 0)
+#define ZSDR_PFB_POWER		(1u << 1)
+
+/*
+ * Start the streams in `streams`, stop the others; a stream already
+ * running keeps its ring position. power_frames: frames summed per power
+ * line (1..65535).
+ */
+struct zsdr_pfb_start {
+	__u32 streams;
+	__u32 power_frames;
+};
+
+/*
+ * Ring bytes in order since the last read (frames as in register-map.md;
+ * a header starts each). Overruns aren't detected here: a reader that
+ * falls a ring behind sees the frame and line numbers jump.
+ */
+struct zsdr_pfb_read {
+	__u32 stream;			/* ZSDR_PFB_BINS or ZSDR_PFB_POWER */
+	__u32 address;			/* user buffer */
+	__u32 length;
+	__u32 readed;			/* out: bytes copied */
+};
+
+struct zsdr_pfb_status {
+	__u32 size;
+	__u32 gen;			/* the gen of the frames now written */
+	__u32 flags;			/* STS 0x44 */
+	__u32 bins_frames;
+	__u32 bins_dropped;
+	__u32 power_chunks;		/* 16 a line */
+	__u32 power_dropped;
+};
+
+#define ZSDR_PFB_INFO		_IOR(ZSDR_IOC_TYPE, 0x21, struct zsdr_pfb_info)
+#define ZSDR_PFB_SET_MASK	_IOW(ZSDR_IOC_TYPE, 0x22, struct zsdr_pfb_mask)
+#define ZSDR_PFB_START		_IOW(ZSDR_IOC_TYPE, 0x23, struct zsdr_pfb_start)
+#define ZSDR_PFB_READ		_IOWR(ZSDR_IOC_TYPE, 0x24, struct zsdr_pfb_read)
+#define ZSDR_PFB_STATUS		_IOR(ZSDR_IOC_TYPE, 0x25, struct zsdr_pfb_status)
+
+/*
+ * poll()/select() on /dev/zynqsdr: POLLIN when a running RX, WF, bins or
+ * power stream has new data, POLLPRI when the PPS FIFO is not empty.
  */
 
 #endif /* _UAPI_WEB888_SDR_H */

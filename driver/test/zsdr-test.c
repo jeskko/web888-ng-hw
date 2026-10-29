@@ -18,6 +18,10 @@
  *                         it after a load (level shifters on, fabric resets
  *                         released), for the driver's PL readiness check
  *
+ * With the channelizer bitstream (signature 0x0E5D0010) the RX/WF checks
+ * are replaced by the ZSDR_PFB_* ones, on whatever the antenna gives: the
+ * power line's strongest bin must stand out in the bins stream too.
+ *
  * Emulator numbers say nothing about the board (syscalls are ~50x slow).
  */
 #include <errno.h>
@@ -42,7 +46,7 @@
 
 static int fd, failed;
 static unsigned int nrx;
-static int ext;
+static int ext, pfb;
 
 #define CHECK(cond, ...) do {						\
 	int ok_ = !!(cond);						\
@@ -113,6 +117,7 @@ static void t_basic(void)
 	CHECK(ioctl(fd, ZSDR_GET_SIGNATURE, &sig) == 0, "GET_SIGNATURE 0x%08x", sig);
 	nrx = sig & 0xf;
 	ext = (sig >> 16) == 0x0e5d;
+	pfb = ext && ((sig >> 4) & 0xf) == 1;
 	CHECK(ioctl(fd, ZSDR_GET_DNA, &dna) == 0 && dna,
 	      "GET_DNA 0x%014llx", (unsigned long long)dna);
 	CHECK(stats(&st) == 0 && st.size == sizeof(st) && st.signature == sig &&
@@ -132,12 +137,21 @@ static void t_basic(void)
 	CHECK(fd2 < 0 && errno == EBUSY, "second open: EBUSY");
 	if (fd2 >= 0)
 		close(fd2);
+	CHECK(ioctl(fd, _IO(ZSDR_IOC_TYPE, 0x3f)) < 0 && errno == ENOTTY,
+	      "unknown ioctl: ENOTTY");
+	if (pfb) {
+		CHECK(ioctl(fd, ZSDR_RX_START, 5) < 0 && errno == EOPNOTSUPP,
+		      "channelizer: RX_START EOPNOTSUPP");
+		CHECK(ioctl(fd, ZSDR_WF_START, 0) < 0 && errno == EOPNOTSUPP,
+		      "channelizer: WF_START EOPNOTSUPP");
+		return;
+	}
+	CHECK(ioctl(fd, ZSDR_PFB_START, &(struct zsdr_pfb_start){ 0 }) < 0 &&
+	      errno == ENODEV, "PFB_START without the channelizer: ENODEV");
 	CHECK(ioctl(fd, ZSDR_RX_START, 4) < 0 && errno == EINVAL, "RX_START 4: EINVAL");
 	CHECK(ioctl(fd, ZSDR_RX_START, ext ? 64 : 41) < 0 && errno == EINVAL,
 	      "RX_START above max: EINVAL");
 	CHECK(ioctl(fd, ZSDR_WF_START, 2) < 0 && errno == EINVAL, "WF_START 2: EINVAL");
-	CHECK(ioctl(fd, _IO(ZSDR_IOC_TYPE, 0x3f)) < 0 && errno == ENOTTY,
-	      "unknown ioctl: ENOTTY");
 	{
 		char b[128];
 
@@ -561,6 +575,270 @@ static int pl_up(void)
 	return 0;
 }
 
+/* ------------------------------------------------------- channelizer */
+
+#define PFB_MAGIC(w)	((uint16_t)((w) >> 48) == 0x5042)
+#define PFB_TYPE(w)	((unsigned)((w) >> 44) & 0xf)
+#define PFB_SUB(w)	((unsigned)((w) >> 40) & 0xf)	/* gen, or chunk */
+#define PFB_NUM(w)	((uint32_t)(w))			/* frame, or line */
+
+static uint64_t pbuf[1 << 18];		/* 2 MB: a ring */
+static size_t pn;			/* words in pbuf */
+
+static long pfb_read(unsigned int stream, void *buf, uint32_t len)
+{
+	struct zsdr_pfb_read r = { .stream = stream,
+				   .address = (uint32_t)(uintptr_t)buf,
+				   .length = len };
+
+	if (ioctl(fd, ZSDR_PFB_READ, &r) < 0)
+		return -errno;
+	return r.readed;
+}
+
+/* append what the stream has (waiting up to ms for it) */
+static long pfb_fill(unsigned int stream, int ms)
+{
+	long n;
+
+	if (!(wait_ev(POLLIN, ms) & POLLIN))
+		return 0;
+	n = pfb_read(stream, (char *)pbuf + pn * 8, sizeof(pbuf) - pn * 8);
+	if (n > 0)
+		pn += n / 8;
+	return n;
+}
+
+static void pfb_drop(size_t words)
+{
+	memmove(pbuf, pbuf + words, (pn - words) * 8);
+	pn -= words;
+}
+
+static int pfb_mask(unsigned int gen, const int *bins, int n)
+{
+	struct zsdr_pfb_mask m = { .gen = gen };
+	int i;
+
+	for (i = 0; i < n; i++)
+		m.mask[bins[i] / 32] |= 1u << (bins[i] % 32);
+	return ioctl(fd, ZSDR_PFB_SET_MASK, &m);
+}
+
+static int pfb_start(unsigned int streams, unsigned int power_frames)
+{
+	struct zsdr_pfb_start st = { .streams = streams,
+				     .power_frames = power_frames };
+
+	return ioctl(fd, ZSDR_PFB_START, &st);
+}
+
+static int pfb_status(struct zsdr_pfb_status *st)
+{
+	memset(st, 0, sizeof(*st));
+	return ioctl(fd, ZSDR_PFB_STATUS, st);
+}
+
+static float f32(uint32_t b)
+{
+	float f;
+
+	memcpy(&f, &b, 4);
+	return f;
+}
+
+/* bins frames in pbuf with nsel bins each (gen `gen` only); per bin j the
+ * mean |X|^2 into pw[j]. Returns frames, -1 on a broken stream. */
+static long pfb_parse_bins(unsigned int gen, int nsel, double *pw, long *gaps,
+			   uint32_t *last)
+{
+	size_t p = 0;
+	long frames = 0;
+	int j;
+
+	for (j = 0; j < nsel; j++)
+		pw[j] = 0;
+	while (p < pn && !(PFB_MAGIC(pbuf[p]) && PFB_TYPE(pbuf[p]) == 1))
+		p++;		/* the read may start inside a frame */
+	while (p + 1 + nsel <= pn) {
+		uint64_t h = pbuf[p];
+
+		if (!PFB_MAGIC(h) || PFB_TYPE(h) != 1)
+			return -1;
+		if (PFB_SUB(h) != gen) {
+			/* frames of another gen: skip to the next header */
+			p++;
+			while (p < pn && !(PFB_MAGIC(pbuf[p]) && PFB_TYPE(pbuf[p]) == 1))
+				p++;
+			continue;
+		}
+		if (*last != UINT32_MAX && PFB_NUM(h) != *last + 1)
+			(*gaps)++;
+		*last = PFB_NUM(h);
+		for (j = 0; j < nsel; j++) {
+			int32_t i = (int32_t)pbuf[p + 1 + j], q = (int32_t)(pbuf[p + 1 + j] >> 32);
+
+			pw[j] += (double)i * i + (double)q * q;
+		}
+		frames++;
+		p += 1 + nsel;
+	}
+	for (j = 0; j < nsel && frames; j++)
+		pw[j] /= frames;
+	pfb_drop(p);
+	return frames;
+}
+
+/* power lines in pbuf: the last whole one into line[2048]; lines seen */
+static long pfb_parse_power(float *line, long *bad)
+{
+	size_t p = 0;
+	long lines = 0;
+	unsigned int c;
+	int j;
+
+	while (p < pn && !(PFB_MAGIC(pbuf[p]) && PFB_TYPE(pbuf[p]) == 2 &&
+			   PFB_SUB(pbuf[p]) == 0))
+		p++;
+	while (p + 16 * 65 <= pn) {
+		uint32_t ln = PFB_NUM(pbuf[p]);
+
+		for (c = 0; c < 16; c++) {
+			uint64_t h = pbuf[p + c * 65];
+
+			if (!PFB_MAGIC(h) || PFB_TYPE(h) != 2 || PFB_SUB(h) != c ||
+			    PFB_NUM(h) != ln) {
+				(*bad)++;
+				break;
+			}
+			for (j = 0; j < 64; j++) {
+				line[128 * c + 2 * j] = f32((uint32_t)pbuf[p + c * 65 + 1 + j]);
+				line[128 * c + 2 * j + 1] = f32(pbuf[p + c * 65 + 1 + j] >> 32);
+			}
+		}
+		lines++;
+		p += 16 * 65;
+	}
+	pfb_drop(p);
+	return lines;
+}
+
+static void t_pfb(void)
+{
+	struct zsdr_pfb_info in = { 0 };
+	struct zsdr_pfb_status st;
+	static float line[2048];
+	double pw[64], t0, cpu0;
+	long lines = 0, bad = 0, frames = 0, gaps = 0, n;
+	uint32_t last = UINT32_MAX, f0;
+	int kmax = 2, kmin = 2, k, sel[65], i;
+	struct rusage ru;
+	char b[64];
+
+	CHECK(ioctl(fd, ZSDR_PFB_INFO, &in) == 0 && in.size == sizeof(in) &&
+	      in.bins == 2048 && in.max_selected == 64,
+	      "PFB_INFO %u bins of %u Hz, %u a frame, rings %u + %u bytes",
+	      in.bins, in.bin_hz, in.max_selected, in.bins_ring_bytes,
+	      in.power_ring_bytes);
+	CHECK(pfb_read(ZSDR_PFB_BINS, b, sizeof(b)) == -EINVAL,
+	      "PFB_READ while stopped: EINVAL");
+	CHECK(pfb_start(ZSDR_PFB_POWER, 0) < 0 && errno == EINVAL,
+	      "PFB_START power with 0 frames: EINVAL");
+	CHECK(pfb_mask(0, NULL, 0) < 0 && errno == EINVAL, "SET_MASK gen 0: EINVAL");
+
+	/* the power line alone: 100 lines a second */
+	pn = 0;
+	CHECK(pfb_start(ZSDR_PFB_POWER, 600) == 0, "PFB_START power, 600 frames a line");
+	t0 = now();
+	while (now() - t0 < 0.5) {
+		pfb_fill(ZSDR_PFB_POWER, 100);
+		lines += pfb_parse_power(line, &bad);
+	}
+	CHECK(lines >= 30 && !bad, "power lines in 0.5 s: %ld, broken %ld", lines, bad);
+	for (k = 2; k < 2040; k++) {
+		if (line[k] > line[kmax])
+			kmax = k;
+		if (line[k] < line[kmin])
+			kmin = k;
+	}
+	CHECK(line[kmin] >= 0 && line[kmax] > 0,
+	      "power line: strongest bin %d (%.1f MHz) %.3g, weakest %d %.3g (%.1f dB)",
+	      kmax, kmax * 0.03, line[kmax], kmin, line[kmin],
+	      10 * log10(line[kmax] / (line[kmin] > 0 ? line[kmin] : 1e-30)));
+
+	/* bins: the strongest, the weakest and 1000 (gen 1) */
+	sel[0] = kmin < kmax ? kmin : kmax;
+	sel[1] = kmin < kmax ? kmax : kmin;
+	sel[2] = 1000;
+	if (sel[1] == 1000)
+		sel[2] = 1001;
+	CHECK(pfb_mask(1, sel, 3) == 0 && pfb_start(ZSDR_PFB_BINS | ZSDR_PFB_POWER, 600) == 0,
+	      "SET_MASK gen 1 (bins %d %d %d), PFB_START bins + power", sel[0], sel[1], sel[2]);
+	pn = 0;
+	t0 = now();
+	while (now() - t0 < 0.2 || frames == 0) {
+		if (now() - t0 > 2)
+			break;
+		pfb_fill(ZSDR_PFB_BINS, 100);
+		n = pfb_parse_bins(1, 3, pw, &gaps, &last);
+		if (n < 0)
+			break;
+		frames += n;
+	}
+	CHECK(frames > 1000 && !gaps, "gen-1 frames %ld, gaps %ld", frames, gaps);
+	{
+		double strong = kmin < kmax ? pw[1] : pw[0];
+		double weak = kmin < kmax ? pw[0] : pw[1];
+
+		CHECK(strong > 10 * weak,
+		      "bins stream: the power line's strongest bin %.1f dB over its weakest",
+		      10 * log10(strong / (weak > 0 ? weak : 1e-30)));
+	}
+
+	/* 64 bins (gen 2), then 65: truncated, still 64 */
+	for (i = 0; i < 65; i++)
+		sel[i] = 100 + i;
+	CHECK(pfb_mask(2, sel, 64) == 0, "SET_MASK gen 2, 64 bins");
+	usleep(20000);
+	CHECK(pfb_status(&st) == 0 && st.gen == 2 && !(st.flags & 0x10),
+	      "STATUS gen %u, flags 0x%x", st.gen, st.flags);
+	CHECK(pfb_mask(3, sel, 65) == 0, "SET_MASK gen 3, 65 bins");
+	usleep(20000);
+	CHECK(pfb_status(&st) == 0 && st.gen == 3 && (st.flags & 0x10),
+	      "STATUS gen %u, truncated (flags 0x%x)", st.gen, st.flags);
+
+	/* 2 s of 64 bins read every 5 ms: rate, gaps, CPU */
+	pn = 0;
+	frames = gaps = 0;
+	last = UINT32_MAX;
+	pfb_status(&st);
+	f0 = st.bins_frames;
+	getrusage(RUSAGE_SELF, &ru);
+	cpu0 = cpu_secs(&ru.ru_utime) + cpu_secs(&ru.ru_stime);
+	t0 = now();
+	while (now() - t0 < 2) {
+		usleep(5000);
+		n = pfb_read(ZSDR_PFB_BINS, (char *)pbuf + pn * 8, sizeof(pbuf) - pn * 8);
+		if (n > 0)
+			pn += n / 8;
+		n = pfb_parse_bins(3, 64, pw, &gaps, &last);
+		if (n < 0) {
+			gaps = -1;
+			break;
+		}
+		frames += n;
+	}
+	getrusage(RUSAGE_SELF, &ru);
+	pfb_status(&st);
+	CHECK(gaps == 0 && st.bins_dropped == 0 && !(st.flags & 0x1e0),
+	      "64 bins, 2 s: %ld frames read (%.0f/s, FPGA %.0f/s), gaps %ld, dropped %u, flags 0x%x, CPU %.1f %%",
+	      frames, frames / 2.0, (st.bins_frames - f0) / (now() - t0), gaps,
+	      st.bins_dropped, st.flags,
+	      100 * (cpu_secs(&ru.ru_utime) + cpu_secs(&ru.ru_stime) - cpu0) / 2);
+	CHECK(pfb_start(0, 0) == 0 && pfb_read(ZSDR_PFB_BINS, b, sizeof(b)) == -EINVAL,
+	      "PFB_START 0: stopped");
+}
+
 int main(int argc, char **argv)
 {
 	const char *dev = "/dev/zynqsdr";
@@ -602,6 +880,12 @@ int main(int argc, char **argv)
 	if (bench_secs > 0)
 		return bench(bench_secs, r2, adc, wf_decim);
 	t_basic();
+	if (pfb) {
+		t_pfb();
+		close(fd);
+		printf(failed ? "FAILED\n" : "ALL PASSED\n");
+		return failed;
+	}
 	t_rx();
 	t_rx_overrun();
 	reopen();

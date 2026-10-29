@@ -9,7 +9,9 @@
  *
  * Extensions for the open bitstream (signature 0x0E5Dxxxx): poll() with
  * interrupts armed only while a reader waits, RX ring overrun detection
- * that keeps frame alignment, and ZSDR_GET_STATS.
+ * that keeps frame alignment, and ZSDR_GET_STATS. With the channelizer
+ * bitstream (0x0E5D0010): the bin mask, the bins and power line rings
+ * (ZSDR_PFB_*).
  *
  * Copyright (c) 2026 web888-ng contributors
  */
@@ -41,6 +43,7 @@
 #define CFG_PHYS	0x40000000
 #define STS_PHYS	0x41000000
 #define PPS_PHYS	0x42000000
+#define EV_PHYS		0x43000000	/* write events: the channelizer's mask */
 
 /*
  * Zynq-7000 SLCR, read only here: PS-PL level shifters and fabric resets.
@@ -54,9 +57,10 @@
 #define SLCR_LVL_SHFTR_EN	0x900
 #define  LVL_SHFTR_ALL		0xf
 
-#define CFG_SIZE	0xa0
-#define STS_SIZE	0x40	/* stock maps 0x18; 0x18.. are extensions */
+#define CFG_SIZE	0xb4	/* stock 0xa0; 0xa0.. the channelizer's */
+#define STS_SIZE	0x58	/* stock maps 0x18; 0x18.. are extensions */
 #define PPS_SIZE	0x1000
+#define EV_SIZE		0x100
 
 /* CFG */
 #define CFG_CTRL	0x00
@@ -73,6 +77,15 @@
 #define CFG_WF_ADDR(n)	(0x92 + 6 * (n))
 #define CFG_WF_LEN(n)	(0x96 + 6 * (n))
 #define CFG_WF_MODE	0x9e
+#define CFG_PFB_CTRL	0xa0
+#define  PFB_BINS	BIT(0)
+#define  PFB_POWER	BIT(1)
+#define  PFB_GEN(g)	((g) << 4)
+#define CFG_BINS_ADDR	0xa4
+#define CFG_BINS_LEN	0xa8
+#define CFG_PW_FRAMES	0xaa
+#define CFG_PW_ADDR	0xac
+#define CFG_PW_LEN	0xb0
 
 /* STS */
 #define STS_SIG		0x00
@@ -89,8 +102,15 @@
 #define STS_RX_DROPS	0x34
 #define STS_RX_BURSTS	0x38
 #define STS_WF_BURSTS	0x3c
+#define STS_PFB_PTRS	0x40	/* [15:0] bins, [31:16] power */
+#define STS_PFB_FLAGS	0x44
+#define STS_BINS_FRAMES	0x48
+#define STS_BINS_DROPS	0x4c
+#define STS_PW_CHUNKS	0x50
+#define STS_PW_DROPS	0x54
 
 #define SIG_OPEN	0x0e5d
+#define SIG_PFB(sig)	(((sig) >> 4) & 0xf)	/* 1: the channelizer build */
 
 #define BURST		128
 #define RING_BURSTS	0xff8		/* as stock: 0x7fc00 bytes */
@@ -98,10 +118,20 @@
 #define NWF		2
 #define MAX_RX		13
 
+/* the channelizer's rings: 2 MB of bins (65 ms with 64 selected), 1 MB
+ * of power lines (~30 lines) */
+#define BINS_BURSTS	0x4000
+#define PW_BURSTS	0x2000
+#define PFB_NBINS	2048
+#define PFB_MAX_SEL	64
+
 /* stream indices */
 #define S_RX		0
 #define S_WF(n)		(1 + (n))
-#define NSTREAMS	3
+#define S_BINS		3
+#define S_PW		4
+#define NSTREAMS	5
+#define NIRQS		4	/* IRQ_F2P 0..3 */
 
 /* GPIOs, in the order of the DT `gpios` property */
 enum { G_MODE, G_ATT_CLK, G_ATT_LATCH, G_ATT_DATA, G_CLK, NGPIOS };
@@ -109,11 +139,13 @@ enum { G_MODE, G_ATT_CLK, G_ATT_LATCH, G_ATT_DATA, G_CLK, NGPIOS };
 struct zsdr_stream {
 	void *buf;
 	dma_addr_t dma;
+	u32 bursts;		/* ring length */
+	u32 bytes;
 	u32 rd;			/* read offset in the ring, bytes */
 	u64 rd_abs;		/* bytes consumed since start (RX, ext) */
 	u32 hw_last;		/* last STS 0x38 value (RX, ext) */
 	u32 hw_wraps;		/* its wraps since start */
-	int irq;		/* "burst done" interrupt, or < 0 */
+	int irq;		/* "burst done" interrupt, or < 0 (set at open) */
 	bool armed;		/* irq enabled, waiting for a burst */
 };
 
@@ -129,6 +161,8 @@ struct zsdr {
 	void __iomem *cfg;
 	void __iomem *sts;
 	void __iomem *pps;
+	void __iomem *ev;
+	resource_size_t cfg_len, sts_len;	/* as mapped (a DT may give less) */
 	struct gpio_desc *gpio[NGPIOS];
 	struct miscdevice misc;
 
@@ -136,8 +170,11 @@ struct zsdr {
 	u32 signature;		/* read at open; 0 before the first one */
 	u32 build_id;		/* STS 0x18 at open (ext) */
 	bool ext;		/* open bitstream: extension registers */
+	bool pfb;		/* the channelizer build */
 	u16 ctrl;		/* shadow of CFG control (only this driver writes it) */
+	u16 pfb_ctrl;		/* and of CFG 0xa0 */
 	unsigned int nrx;
+	int irqs[NIRQS];	/* IRQ_F2P 0..3, or < 0 */
 
 	struct mutex lock;	/* ioctls, open/release, remove */
 	atomic_t opened;
@@ -224,27 +261,36 @@ static u32 hw_ptr(struct zsdr *z, int i)
 		return sts_r32(z, STS_PTR01) & 0xffff;
 	case S_WF(0):
 		return sts_r32(z, STS_PTR01) >> 16;
+	case S_BINS:
+		return sts_r32(z, STS_PFB_PTRS) & 0xffff;
+	case S_PW:
+		return sts_r32(z, STS_PFB_PTRS) >> 16;
 	default:
 		return sts_r32(z, STS_PTR2PPS) & 0xffff;
 	}
 }
 
-static u16 ctrl_bit(int i)
-{
-	return i == S_RX ? CTRL_RX : CTRL_WF(i - 1);
-}
-
 static bool running(struct zsdr *z, int i)
 {
-	return z->ctrl & ctrl_bit(i);
+	switch (i) {
+	case S_RX:
+		return z->ctrl & CTRL_RX;
+	case S_BINS:
+		return z->pfb_ctrl & PFB_BINS;
+	case S_PW:
+		return z->pfb_ctrl & PFB_POWER;
+	default:
+		return z->ctrl & CTRL_WF(i - 1);
+	}
 }
 
 /* bytes of new data in stream i (ring position only) */
 static u32 avail(struct zsdr *z, int i)
 {
-	u32 hw = (hw_ptr(z, i) % RING_BURSTS) * BURST;
+	struct zsdr_stream *s = &z->s[i];
+	u32 hw = (hw_ptr(z, i) % s->bursts) * BURST;
 
-	return (hw + RING_BYTES - z->s[i].rd) % RING_BYTES;
+	return (hw + s->bytes - s->rd) % s->bytes;
 }
 
 static u32 pps_count(struct zsdr *z)
@@ -331,12 +377,12 @@ static long stream_read(struct zsdr *z, int i, u32 uaddr, u32 len)
 	else
 		n = min(avail(z, i), len);
 	while (done < n) {
-		chunk = min(n - done, RING_BYTES - s->rd);
+		chunk = min(n - done, s->bytes - s->rd);
 		dma_sync_single_for_cpu(z->dev, s->dma + s->rd, chunk,
 					DMA_FROM_DEVICE);
 		if (copy_to_user(dst + done, s->buf + s->rd, chunk))
 			return -EFAULT;
-		s->rd = (s->rd + chunk) % RING_BYTES;
+		s->rd = (s->rd + chunk) % s->bytes;
 		s->rd_abs += chunk;
 		done += chunk;
 	}
@@ -347,19 +393,37 @@ static void stream_program(struct zsdr *z, int i)
 {
 	struct zsdr_stream *s = &z->s[i];
 
-	if (i == S_RX) {
+	switch (i) {
+	case S_RX:
 		cfg_w32(z, CFG_RX_ADDR, s->dma);
-		cfg_w16(z, CFG_RX_LEN, RING_BURSTS - 1);
-	} else {
+		cfg_w16(z, CFG_RX_LEN, s->bursts - 1);
+		break;
+	case S_BINS:
+		cfg_w32(z, CFG_BINS_ADDR, s->dma);
+		cfg_w16(z, CFG_BINS_LEN, s->bursts - 1);
+		break;
+	case S_PW:
+		cfg_w32(z, CFG_PW_ADDR, s->dma);
+		cfg_w16(z, CFG_PW_LEN, s->bursts - 1);
+		break;
+	default:
 		cfg_w32(z, CFG_WF_ADDR(i - 1), s->dma);
-		cfg_w16(z, CFG_WF_LEN(i - 1), RING_BURSTS - 1);
+		cfg_w16(z, CFG_WF_LEN(i - 1), s->bursts - 1);
 	}
 	stream_reset(z, i);
+}
+
+static void pfb_ctrl_write(struct zsdr *z, u16 v)
+{
+	z->pfb_ctrl = v;
+	cfg_w16(z, CFG_PFB_CTRL, v);
 }
 
 static void stop_all(struct zsdr *z)
 {
 	ctrl_write(z, 0);
+	if (z->pfb)
+		pfb_ctrl_write(z, 0);
 }
 
 /* --------------------------------------------------------------- GPIOs */
@@ -467,6 +531,8 @@ static struct zsdr *to_zsdr(struct file *f)
 static int pl_attach(struct zsdr *z)
 {
 	u32 sig;
+	bool pfb;
+	int i;
 
 	if (z->slcr && pl_check) {
 		u32 lvl = readl(z->slcr + SLCR_LVL_SHFTR_EN);
@@ -481,18 +547,44 @@ static int pl_attach(struct zsdr *z)
 	}
 
 	sig = sts_r32(z, STS_SIG);
+	pfb = (sig >> 16) == SIG_OPEN && SIG_PFB(sig) == 1;
 	z->nrx = sig & 0xf;
-	if (!z->nrx || z->nrx > MAX_RX) {
+	if (pfb && (z->cfg_len < CFG_SIZE || z->sts_len < STS_SIZE)) {
+		dev_warn_ratelimited(z->dev,
+			"channelizer bitstream, but the DT maps CFG 0x%llx / STS 0x%llx bytes (needs 0x%x / 0x%x)\n",
+			(u64)z->cfg_len, (u64)z->sts_len, CFG_SIZE, STS_SIZE);
+		return -ENODEV;
+	}
+	if (!pfb && (!z->nrx || z->nrx > MAX_RX)) {
 		dev_warn_ratelimited(z->dev, "no SDR logic (signature 0x%08x)\n",
 				     sig);
 		return -ENODEV;
 	}
-	if (sig != z->signature)
-		dev_info(z->dev, "signature 0x%08x (%s bitstream), %u RX channels\n",
-			 sig, (sig >> 16) == SIG_OPEN ? "open" : "stock", z->nrx);
+	if (sig != z->signature) {
+		if (pfb)
+			dev_info(z->dev, "signature 0x%08x (channelizer bitstream)\n",
+				 sig);
+		else
+			dev_info(z->dev, "signature 0x%08x (%s bitstream), %u RX channels\n",
+				 sig, (sig >> 16) == SIG_OPEN ? "open" : "stock",
+				 z->nrx);
+	}
 	z->signature = sig;
 	z->ext = (sig >> 16) == SIG_OPEN;
+	z->pfb = pfb;
 	z->build_id = z->ext ? sts_r32(z, STS_BUILD) : 0;
+
+	/* the channelizer's rings use RX's and WF0's interrupt lines */
+	for (i = 0; i < NSTREAMS; i++)
+		z->s[i].irq = -ENXIO;
+	if (pfb) {
+		z->s[S_BINS].irq = z->irqs[0];
+		z->s[S_PW].irq = z->irqs[1];
+	} else {
+		for (i = 0; i <= S_WF(1); i++)
+			z->s[i].irq = z->irqs[i];
+	}
+	z->pfb_ctrl = 0;
 	stop_all(z);		/* as stock: open stops all streams */
 	return 0;
 }
@@ -591,11 +683,121 @@ static void fill_stats(struct zsdr *z, struct zsdr_stats *st)
 	st->wf_bursts = sts_r32(z, STS_WF_BURSTS);
 }
 
+/* the channelizer build's ioctls */
+static long pfb_ioctl(struct zsdr *z, unsigned int cmd, void __user *up)
+{
+	switch (cmd) {
+	case ZSDR_PFB_INFO: {
+		struct zsdr_pfb_info in = {
+			.size = sizeof(in),
+			.bins = PFB_NBINS,
+			.max_selected = PFB_MAX_SEL,
+			.bin_hz = 30000,
+			.frame_hz = 60000,
+			.bins_ring_bytes = z->s[S_BINS].bytes,
+			.power_ring_bytes = z->s[S_PW].bytes,
+		};
+
+		return copy_to_user(up, &in, sizeof(in)) ? -EFAULT : 0;
+	}
+
+	case ZSDR_PFB_SET_MASK: {
+		struct zsdr_pfb_mask m;
+		unsigned int w;
+
+		if (copy_from_user(&m, up, sizeof(m)))
+			return -EFAULT;
+		if (m.gen < 1 || m.gen > 15)
+			return -EINVAL;
+		/* into the bank not in use; the gen request switches banks */
+		for (w = 0; w < ARRAY_SIZE(m.mask); w++)
+			writel(m.mask[w], z->ev + 4 * w);
+		pfb_ctrl_write(z, (z->pfb_ctrl & ~PFB_GEN(0xf)) | PFB_GEN(m.gen));
+		return 0;
+	}
+
+	case ZSDR_PFB_START: {
+		struct zsdr_pfb_start st;
+		u16 v = z->pfb_ctrl;
+
+		if (copy_from_user(&st, up, sizeof(st)))
+			return -EFAULT;
+		if (st.streams & ~(ZSDR_PFB_BINS | ZSDR_PFB_POWER))
+			return -EINVAL;
+		if ((st.streams & ZSDR_PFB_POWER) &&
+		    (!st.power_frames || st.power_frames > 0xffff))
+			return -EINVAL;
+		if (!(st.streams & ZSDR_PFB_BINS))
+			v &= ~PFB_BINS;
+		if (!(st.streams & ZSDR_PFB_POWER))
+			v &= ~PFB_POWER;
+		if (v != z->pfb_ctrl) {
+			pfb_ctrl_write(z, v);
+			/* a ring restarts once its outstanding bursts drained */
+			udelay(100);
+		}
+		if (st.streams & ZSDR_PFB_POWER)
+			cfg_w16(z, CFG_PW_FRAMES, st.power_frames);
+		if ((st.streams & ZSDR_PFB_BINS) && !(v & PFB_BINS)) {
+			stream_program(z, S_BINS);
+			v |= PFB_BINS;
+		}
+		if ((st.streams & ZSDR_PFB_POWER) && !(v & PFB_POWER)) {
+			stream_program(z, S_PW);
+			v |= PFB_POWER;
+		}
+		pfb_ctrl_write(z, v);
+		return 0;
+	}
+
+	case ZSDR_PFB_READ: {
+		struct zsdr_pfb_read rd;
+		long r;
+
+		if (copy_from_user(&rd, up, sizeof(rd)))
+			return -EFAULT;
+		if (rd.stream != ZSDR_PFB_BINS && rd.stream != ZSDR_PFB_POWER)
+			return -EINVAL;
+		r = stream_read(z, rd.stream == ZSDR_PFB_BINS ? S_BINS : S_PW,
+				rd.address, rd.length);
+		if (r < 0)
+			return r;
+		return put_user(r, &((struct zsdr_pfb_read __user *)up)->readed);
+	}
+
+	case ZSDR_PFB_STATUS: {
+		struct zsdr_pfb_status st = { .size = sizeof(st) };
+
+		st.flags = sts_r32(z, STS_PFB_FLAGS);
+		st.gen = st.flags & 0xf;
+		st.bins_frames = sts_r32(z, STS_BINS_FRAMES);
+		st.bins_dropped = sts_r32(z, STS_BINS_DROPS);
+		st.power_chunks = sts_r32(z, STS_PW_CHUNKS);
+		st.power_dropped = sts_r32(z, STS_PW_DROPS);
+		return copy_to_user(up, &st, sizeof(st)) ? -EFAULT : 0;
+	}
+	}
+	return -ENOTTY;
+}
+
 static long zsdr_ioctl_locked(struct zsdr *z, unsigned int cmd,
 			      unsigned long arg)
 {
 	void __user *up = (void __user *)arg;
 	long r;
+
+	switch (cmd) {
+	case ZSDR_RX_START: case ZSDR_RX_PARAM: case ZSDR_RX_READ:
+	case ZSDR_WF_START: case ZSDR_WF_PARAM: case ZSDR_WF_READ:
+		if (z->pfb)
+			return -EOPNOTSUPP;
+		break;
+	case ZSDR_PFB_INFO: case ZSDR_PFB_SET_MASK: case ZSDR_PFB_START:
+	case ZSDR_PFB_READ: case ZSDR_PFB_STATUS:
+		if (!z->pfb)
+			return -ENODEV;
+		return pfb_ioctl(z, cmd, up);
+	}
 
 	switch (cmd) {
 	case ZSDR_AD8370_SET:
@@ -784,13 +986,19 @@ ATTRIBUTE_GROUPS(zsdr);
 /* ---------------------------------------------------------------- probe */
 
 static void __iomem *map_window(struct platform_device *pdev, int idx,
-				resource_size_t fallback, resource_size_t size)
+				resource_size_t fallback, resource_size_t size,
+				resource_size_t *len)
 {
 	struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, idx);
 
-	if (r)
+	if (r) {
+		if (len)
+			*len = resource_size(r);
 		return devm_ioremap_resource(&pdev->dev, r);
+	}
 	/* vendor DT: node without reg, fixed addresses */
+	if (len)
+		*len = size;
 	return devm_ioremap(&pdev->dev, fallback, size) ?: IOMEM_ERR_PTR(-ENOMEM);
 }
 
@@ -808,7 +1016,7 @@ static void zsdr_free_bufs(void *data)
 
 	for (i = 0; i < NSTREAMS; i++)
 		if (z->s[i].buf)
-			dma_free_noncoherent(z->dev, RING_BYTES, z->s[i].buf,
+			dma_free_noncoherent(z->dev, z->s[i].bytes, z->s[i].buf,
 					     z->s[i].dma, DMA_FROM_DEVICE);
 }
 
@@ -836,15 +1044,18 @@ static int zsdr_probe(struct platform_device *pdev)
 	init_waitqueue_head(&z->wq);
 	platform_set_drvdata(pdev, z);
 
-	z->cfg = map_window(pdev, 0, CFG_PHYS, CFG_SIZE);
+	z->cfg = map_window(pdev, 0, CFG_PHYS, CFG_SIZE, &z->cfg_len);
 	if (IS_ERR(z->cfg))
 		return PTR_ERR(z->cfg);
-	z->sts = map_window(pdev, 1, STS_PHYS, STS_SIZE);
+	z->sts = map_window(pdev, 1, STS_PHYS, STS_SIZE, &z->sts_len);
 	if (IS_ERR(z->sts))
 		return PTR_ERR(z->sts);
-	z->pps = map_window(pdev, 2, PPS_PHYS, PPS_SIZE);
+	z->pps = map_window(pdev, 2, PPS_PHYS, PPS_SIZE, NULL);
 	if (IS_ERR(z->pps))
 		return PTR_ERR(z->pps);
+	z->ev = map_window(pdev, 3, EV_PHYS, EV_SIZE, NULL);
+	if (IS_ERR(z->ev))
+		return PTR_ERR(z->ev);
 	if (of_machine_is_compatible("xlnx,zynq-7000")) {
 		/* owned by the SLCR syscon: map without requesting it */
 		z->slcr = devm_ioremap(dev, SLCR_PHYS, SLCR_SIZE);
@@ -875,29 +1086,32 @@ static int zsdr_probe(struct platform_device *pdev)
 	for (i = 0; i < NSTREAMS; i++) {
 		struct zsdr_stream *s = &z->s[i];
 
-		s->buf = dma_alloc_noncoherent(dev, RING_BYTES, &s->dma,
+		s->bursts = i == S_BINS ? BINS_BURSTS :
+			    i == S_PW ? PW_BURSTS : RING_BURSTS;
+		s->bytes = s->bursts * BURST;
+		s->buf = dma_alloc_noncoherent(dev, s->bytes, &s->dma,
 					       DMA_FROM_DEVICE, GFP_KERNEL);
 		if (!s->buf)
 			return -ENOMEM;
 		s->irq = -ENXIO;
 	}
 
-	/* IRQ_F2P 0..3: RX, WF0, WF1 burst done, PPS edge */
-	z->pps_irq = -ENXIO;
-	for (i = 0; i < 4; i++) {
+	/*
+	 * IRQ_F2P 0..3: RX, WF0, WF1 burst done, PPS edge (the channelizer:
+	 * bins, power, -, PPS); the streams get theirs at open
+	 */
+	for (i = 0; i < NIRQS; i++) {
 		int irq = platform_get_irq_optional(pdev, i);
 
+		z->irqs[i] = irq;
 		if (irq < 0)
 			continue;
 		ret = devm_request_irq(dev, irq, burst_irq, IRQF_NO_AUTOEN,
 				       DRV_NAME, z);
 		if (ret)
 			return ret;
-		if (i < NSTREAMS)
-			z->s[i].irq = irq;
-		else
-			z->pps_irq = irq;
 	}
+	z->pps_irq = z->irqs[3];
 
 	z->misc.minor = MISC_DYNAMIC_MINOR;
 	z->misc.name = "zynqsdr";	/* the stock device name */
@@ -908,7 +1122,7 @@ static int zsdr_probe(struct platform_device *pdev)
 		return ret;
 
 	dev_info(dev, "registered%s%s\n",
-		 z->s[S_RX].irq < 0 ? ", no interrupts (poll() unavailable)" : "",
+		 z->irqs[0] < 0 ? ", no interrupts (poll() unavailable)" : "",
 		 z->slcr && pl_check ? "" : ", no PL readiness check");
 	return 0;
 }
@@ -921,7 +1135,7 @@ static void zsdr_remove(struct platform_device *pdev)
 	misc_deregister(&z->misc);	/* waits out a running misc_open() */
 	mutex_lock(&z->lock);
 	/* streams run only after a successful open, so the PL is there */
-	was_running = z->ctrl;
+	was_running = z->ctrl || z->pfb_ctrl;
 	if (was_running)
 		stop_all(z);
 	disarm_irqs(z);

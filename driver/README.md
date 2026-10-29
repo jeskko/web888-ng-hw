@@ -4,7 +4,9 @@ GPL-2.0-or-later. Replaces the closed `zynqsdr` driver that is built into
 the vendor kernel. Written only from `../docs/stock-driver.md` and
 `../fpga/doc/register-map.md` (no vendor code).
 
-Status: **works in the emulator, untested on hardware**. Compiles
+Status: **runs on a Web-888** (2026-10-29: web888d through it with the
+open bitstream v0.2.0 on the production unit, under the web888-ng-os
+image; the channelizer part is untested on hardware). Compiles
 warning-free (`W=1`) against the 6.18 kernel of the Yocto image
 (web888-ng-os, linux-xlnx 6.18.10). In the QEMU virtual Web-888
 (`../emu/run.sh --kernel <6.18 zImage>`, vendor userspace) an unmodified
@@ -35,7 +37,8 @@ follows the code), error codes, unbind while open.
 * Unbinding (sysfs) while the device is open is safe: the open file keeps
   the driver state, its ioctls fail with `ENODEV` and `poll()` reports
   `POLLHUP`.
-* DMA rings: three 0x7FC00-byte buffers (RX, WF0, WF1) allocated once at
+* DMA rings: three 0x7FC00-byte buffers (RX, WF0, WF1), and the
+  channelizer's 2 MB bins and 1 MB power line rings, allocated once at
   probe, cached, synced before each copy. A stream stop can never race
   with freeing its buffer.
 
@@ -57,6 +60,20 @@ Extensions (open bitstream):
   counters.
 * sysfs on the platform device: `signature`, `bitstream`.
 
+The channelizer bitstream (signature 0x0E5D0010, `websdr_pfb.bit`;
+`../fpga/doc/register-map.md` "The channelizer build"):
+
+* `ZSDR_PFB_INFO`, `ZSDR_PFB_SET_MASK` (64 words and a gen: the frames
+  carry the gen of the mask they used), `ZSDR_PFB_START` (bins and/or the
+  power line, frames per line), `ZSDR_PFB_READ` (ring bytes in order, like
+  `RX_READ`), `ZSDR_PFB_STATUS` (gen, flags, frame/chunk/drop counters).
+  `poll()` covers both rings (interrupt lines 0 and 1).
+* The stock RX/WF ioctls fail with `EOPNOTSUPP` there, the PFB ones with
+  `ENODEV` with any other bitstream.
+* No overrun detection: the rings have no lap counter. Every bins frame
+  carries a frame number and every power chunk its line number, so a
+  reader sees a lap as a jump.
+
 ## Device tree
 
 Binds to either node:
@@ -74,13 +91,18 @@ zynqsdr {
 /* web888-ng */
 sdr@40000000 {
 	compatible = "web888-ng,sdr";
-	reg = <0x40000000 0xa0>, <0x41000000 0x40>, <0x42000000 0x1000>;
+	reg = <0x40000000 0xb4>, <0x41000000 0x58>, <0x42000000 0x1000>,
+	      <0x43000000 0x100>;	/* CFG, STS, PPS FIFO, EV (the mask) */
 	interrupt-parent = <&intc>;
 	interrupts = <0 29 1>, <0 30 1>, <0 31 1>, <0 32 1>;	/* RX, WF0, WF1, PPS */
 	gpios = <&gpio0 10 1>, <&gpio0 13 1>, <&gpio0 12 1>, <&gpio0 11 1>,
 		<&gpio0 49 1>;	/* HF/VHF, AD8370 CLK, LATCH, DATA, ref clock */
 };
 ```
+
+CFG and STS smaller than that work with the RX/WF bitstreams; the driver
+refuses the channelizer bitstream then. Without the fourth `reg` the EV
+window is mapped at its fixed address.
 
 The GPIOs are driven with **raw** levels: the vendor DT marks them
 active-low, but the stock driver used the legacy raw GPIO API, so raw
