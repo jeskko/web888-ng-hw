@@ -3,6 +3,7 @@
 #
 #   vivado -mode batch -source vivado/build.tcl -tclargs hf     ;# 122.88 MHz ADC clock
 #   vivado -mode batch -source vivado/build.tcl -tclargs vhf    ;# 61.44 .. 110.592 MHz
+#   vivado -mode batch -source vivado/build.tcl -tclargs pfb    ;# the channelizer, 122.88 MHz
 #
 # Output: build/<variant>/websdr_<variant>.bit (+ reports). The file is a
 # drop-in for /media/mmcblk0p1/websdr_<variant>.bit on the stock firmware.
@@ -19,9 +20,10 @@ set build [file join $root build $variant]
 file mkdir $build
 
 switch -- $variant {
-  hf  { set clkin_ps 8138; set pll_mult 8;  set xdc_period 8.000; set nrx 12; set guard_ns 0.400 }
-  vhf { set clkin_ps 9042; set pll_mult 14; set xdc_period 9.000; set nrx 13; set guard_ns 0.500 }
-  default { error "unknown variant '$variant' (hf|vhf)" }
+  hf  { set clkin_ps 8138; set pll_mult 8;  set xdc_period 8.000; set nrx 12; set guard_ns 0.400; set pfb 0 }
+  vhf { set clkin_ps 9042; set pll_mult 14; set xdc_period 9.000; set nrx 13; set guard_ns 0.500; set pfb 0 }
+  pfb { set clkin_ps 8138; set pll_mult 8;  set xdc_period 8.000; set nrx 12; set guard_ns 0.400; set pfb 1 }
+  default { error "unknown variant '$variant' (hf|vhf|pfb)" }
 }
 set build_id [expr 0x[clock format [clock seconds] -format %Y%m%d]]
 
@@ -31,6 +33,11 @@ set_property target_language Verilog [current_project]
 
 add_files [glob [file join $root rtl *.v] [file join $root rtl gen *.v]]
 add_files [file join $root rtl gen sincos_qw.mem]
+# the channelizer (PFB build): its RTL and ROM tables, found by name
+if {$pfb} {
+  add_files [glob [file join $root rtl fft *.v]]
+  add_files [glob [file join $root rtl gen pfb_*.mem]]
+}
 
 # RX channel count follows the vendor: 12 at 122.88 MHz (13 was unstable on
 # some boards there), 13 in the vhf bitstream (ADC <= 110.592 MHz; the stock
@@ -77,6 +84,7 @@ set_property -dict [list \
   CONFIG.CLKIN_PERIOD_PS $clkin_ps \
   CONFIG.PLL_MULT $pll_mult \
   CONFIG.BUILD_ID $build_id \
+  CONFIG.PFB $pfb \
 ] [get_bd_cells core_0]
 
 connect_bd_intf_net [get_bd_intf_pins ps_0/M_AXI_GP0] [get_bd_intf_pins core_0/s_axi]

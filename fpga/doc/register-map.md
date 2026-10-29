@@ -39,7 +39,7 @@ any outstanding bursts drain), latching address/length/mode at that moment.
 
 | offset | width | field |
 |---|---|---|
-| 0x00 | u32 | signature: [3:0] RX channels (hf build 12, vhf build 13, as stock; `NRX` ≤ 13), [11:8] WF channels (2), [31:16] 0x0E5D = open design |
+| 0x00 | u32 | signature: [3:0] RX channels (hf build 12, vhf build 13, as stock; `NRX` ≤ 13), [7:4] 1 = the channelizer build (below; then 0 RX and 0 WF: 0x0E5D0010), [11:8] WF channels (2), [31:16] 0x0E5D = open design |
 | 0x04 | u16 | RX ring write pointer (completed bursts) |
 | 0x06 | u16 | WF0 ring write pointer |
 | 0x08 | u16 | WF1 ring write pointer |
@@ -132,3 +132,53 @@ builds of this bitstream had the polarity inverted, and the stock server
 then got a continuous stream: at decimation 1 that is 491 MB/s, more than
 the HP port takes. Still to confirm against the stock bitstream on
 hardware (`docs/hardware-test-plan.md`).
+
+## The channelizer build (signature 0x0E5D0010)
+
+`web888_core` with `PFB = 1` (`make pfb`, `websdr_pfb.bit`;
+`docs/channelizer.md` §3.7) has the polyphase channelizer instead of the
+RX and waterfall chains: 2048 bins of 30 kHz at 60 kS/s, at most 64 of
+them selected per frame, and a full-band power line. The shared registers
+keep their places (GPIO 0x84, PPS, DNA, build id, ADC monitors, flags);
+the RX/WF fields read 0. Its bins ring goes out on HP0, its power line
+ring on HP1; HP2 is idle. 122.88 MHz (HF) only.
+
+CFG:
+
+| off | width | field |
+|---|---|---|
+| 0xA0 | u16 | control: bit 0 bins on, bit 1 power line on, [7:4] gen request (the next frame uses the mask written since, and carries this gen) |
+| 0xA4 | u32 | bins ring physical address (128-byte aligned) |
+| 0xA8 | u16 | bins ring length − 1, in 128-byte bursts |
+| 0xAA | u16 | frames per power line (summed |X|², e.g. 20: 3000 lines a second) |
+| 0xAC | u32 | power ring physical address |
+| 0xB0 | u16 | power ring length − 1, in bursts |
+
+The mask: the EV window, base + 0x3000000 (0x43000000), 64 words written
+one at a time; bit b of word w selects bin 32w + b (bin 2047 can't be
+selected). Writes go to the bank not in use; then a new gen in 0xA0
+switches banks at the next frame. Reads of the window return 0.
+
+STS:
+
+| off | width | field |
+|---|---|---|
+| 0x40 | u32 | [15:0] bins ring write pointer (bursts done), [31:16] power ring pointer |
+| 0x44 | u32 | [3:0] gen in use, 4 truncated (more than 64 set), 5 bins overflow, 6 bins bresp error, 7 power overflow, 8 power bresp error |
+| 0x48 | u32 | bin frames written |
+| 0x4C | u32 | bin frames dropped (no room in the ring) |
+| 0x50 | u32 | power chunks written (16 a line) |
+| 0x54 | u32 | power chunks dropped |
+
+Frames in the rings (64-bit words, little-endian; a frame is written whole
+or dropped whole):
+
+* bins: header `{0x5042, 1, gen[3:0], 0[7:0], frame[31:0]}`, then each
+  selected bin, lowest first, `{Q[31:0], I[31:0]}` (I low; a full-scale
+  sine reads 2^29).
+* power: per line 16 chunks, each a header `{0x5042, 2, chunk[3:0],
+  0[7:0], line[31:0]}` and 64 words `{f32[2j+1], f32[2j]}` (bins 128c ..
+  128c + 127, the even bin low; IEEE float32, mantissa truncated).
+
+Interrupts: IRQ_F2P[0] a bins burst written, [1] a power burst written,
+[3] PPS edge.

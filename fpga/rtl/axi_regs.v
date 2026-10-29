@@ -7,6 +7,9 @@
 //                          strb/strh and kernel-emulated unaligned stores)
 //   base + 0x1000000  STS  read only
 //   base + 0x2000000  PPS  read pops one word from the PPS FIFO
+//   base + 0x3000000  EV   write only: each word written comes out as a
+//                          one-clock event (ev_idx, ev_data); reads 0
+//                          (the channelizer's bin mask, web888_core PFB)
 // Region is selected by addr[25:24]; word index by addr[WIDX+1:2].
 // INCR and FIXED bursts are supported; one transaction per direction at a time.
 
@@ -24,6 +27,10 @@ module axi_regs #(
   input  wire [31:0]            pps_data,
   input  wire                   pps_valid,
   output reg                    pps_pop,
+
+  output wire                   ev_valid,
+  output wire [9:0]             ev_idx,
+  output wire [31:0]            ev_data,
 
   input  wire [ID_W-1:0]        s_axi_awid,
   input  wire [31:0]            s_axi_awaddr,
@@ -88,7 +95,7 @@ module axi_regs #(
   // timing. B is sent after the last beat is applied, so a read issued after
   // the write response always sees the new value.
   // wp_data/strb are broadcast to all cfg words across the die: replicate.
-  reg        wp_valid, wp_en, wp_last;
+  reg        wp_valid, wp_en, wp_ev, wp_last;
   reg [9:0]  wp_idx;
   (* max_fanout = 8 *) reg [31:0] wp_data;
   (* max_fanout = 8 *) reg [3:0]  wp_strb;
@@ -123,6 +130,7 @@ module axi_regs #(
       if (w_busy && s_axi_wvalid && s_axi_wready) begin
         wp_valid <= 1'b1;
         wp_en    <= (w_region == 2'd0 && w_idx < CFG_WORDS);
+        wp_ev    <= (w_region == 2'd3);
         wp_idx   <= w_idx;
         wp_data  <= s_axi_wdata;
         wp_strb  <= s_axi_wstrb;
@@ -138,6 +146,10 @@ module axi_regs #(
       end
     end
   end
+
+  assign ev_valid = wp_valid && wp_ev;
+  assign ev_idx   = wp_idx;
+  assign ev_data  = wp_data;
 
   // ---------------- read path
   reg        r_busy;

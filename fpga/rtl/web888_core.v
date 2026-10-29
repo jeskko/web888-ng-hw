@@ -14,13 +14,25 @@
 //
 // Register map: see doc/register-map.md (compatible with the stock zynqsdr
 // kernel driver from web-888-20260919).
+//
+// PFB = 1 builds the channelizer instead of the RX and waterfall chains
+// (docs/channelizer.md): its bins ring on m_axi_rx (HP0), its power line
+// ring on m_axi_wf0 (HP1), m_axi_wf1 idle; its registers follow the stock
+// ones (CFG 0xa0.., STS 0x40..) and the bin mask is written through the
+// EV window (base + 0x3000000).
 
 module web888_core #(
   parameter integer NRX             = 12,      // hf build 12, vhf build 13 (as stock); max 13 (CFG slots)
   parameter integer CLKIN_PERIOD_PS = 8138,      // PLL input period (ps)
   parameter integer PLL_MULT        = 8,         // HF: 8, VHF: 14 (see clk_gen.v)
   parameter integer BUILD_ID        = 0,         // e.g. 32'h20261016, reported at STS 0x18
-  parameter         ROM_FILE        = "sincos_qw.mem"
+  parameter         ROM_FILE        = "sincos_qw.mem",
+  parameter integer PFB             = 0,         // 1: the channelizer build
+  // the channelizer's ROM tables (rtl/gen; Vivado finds them by name, a
+  // simulation passes paths)
+  parameter         PFB_COEF_PREFIX = "pfb_coef_",
+  parameter         PFB_TW_PREFIX   = "pfb_tw_",
+  parameter         PFB_SPLIT_FILE  = "pfb_split_tw.mem"
 ) (
   // ADC (LTC2208, CMOS, offset binary)
   input  wire        adc_clk_p_i,
@@ -257,8 +269,8 @@ module web888_core #(
   end
 
   // ---------------------------------------------------------------- registers
-  localparam integer CFG_WORDS = 40;
-  localparam integer STS_WORDS = 16;
+  localparam integer CFG_WORDS = PFB ? 45 : 40;
+  localparam integer STS_WORDS = PFB ? 22 : 16;
   wire [CFG_WORDS*32-1:0] cfg;
   wire [STS_WORDS*32-1:0] sts;
 
@@ -291,10 +303,14 @@ module web888_core #(
 
   wire [31:0] pps_fifo_data;
   wire        pps_fifo_valid, pps_fifo_pop;
+  wire        ev_valid;
+  wire [9:0]  ev_idx;
+  wire [31:0] ev_data;
 
   axi_regs #(.CFG_WORDS(CFG_WORDS), .STS_WORDS(STS_WORDS), .ID_W(12)) regs (
     .clk(clk), .rst(rst), .cfg(cfg), .sts(sts),
     .pps_data(pps_fifo_data), .pps_valid(pps_fifo_valid), .pps_pop(pps_fifo_pop),
+    .ev_valid(ev_valid), .ev_idx(ev_idx), .ev_data(ev_data),
     .s_axi_awid(s_axi_awid), .s_axi_awaddr(s_axi_awaddr), .s_axi_awlen(s_axi_awlen),
     .s_axi_awsize(s_axi_awsize), .s_axi_awburst(s_axi_awburst), .s_axi_awlock(s_axi_awlock),
     .s_axi_awcache(s_axi_awcache), .s_axi_awprot(s_axi_awprot), .s_axi_awqos(s_axi_awqos),
@@ -310,13 +326,30 @@ module web888_core #(
     .s_axi_rid(s_axi_rid), .s_axi_rdata(s_axi_rdata), .s_axi_rresp(s_axi_rresp),
     .s_axi_rlast(s_axi_rlast), .s_axi_rvalid(s_axi_rvalid), .s_axi_rready(s_axi_rready));
 
-  // ---------------------------------------------------------------- RX
-  wire        rx_run, rx_wv;
-  wire [63:0] rx_wd;
+  // status of the RX/WF chains (zero in the PFB build) and the channelizer
+  // (zero in the others), for STS and the interrupts below
+  wire        rx_run, rx_done, rx_ovf, rx_seq_err, rx_bresp_err;
   wire [15:0] rx_ptr;
-  wire        rx_done, rx_ovf, rx_seq_err, rx_bresp_err;
-  wire [15:0] rx_resyncs;
   wire [31:0] rx_frames, rx_drops, rx_bursts;
+  wire        wf0_run, wf0_done, wf0_ovf, wf0_bresp_err;
+  wire        wf1_run, wf1_done, wf1_ovf, wf1_bresp_err;
+  wire [15:0] wf0_ptr, wf1_ptr;
+  wire [31:0] wf0_bursts, wf1_bursts;
+  wire [15:0] pfb_bins_ptr, pfb_power_ptr;
+  wire        pfb_bins_done, pfb_power_done, pfb_trunc;
+  wire        pfb_bins_ovf, pfb_bins_berr, pfb_power_ovf, pfb_power_berr;
+  wire [3:0]  pfb_gen;
+  wire [31:0] pfb_bins_frames, pfb_bins_drops, pfb_power_lines, pfb_power_drops;
+
+  generate if (PFB == 0) begin : ddc
+  assign {pfb_bins_ptr, pfb_power_ptr, pfb_bins_done, pfb_power_done, pfb_trunc,
+          pfb_bins_ovf, pfb_bins_berr, pfb_power_ovf, pfb_power_berr, pfb_gen,
+          pfb_bins_frames, pfb_bins_drops, pfb_power_lines, pfb_power_drops} = 0;
+
+  // ---------------------------------------------------------------- RX
+  wire        rx_wv;
+  wire [63:0] rx_wd;
+  wire [15:0] rx_resyncs;
 
   rx_chain #(.NCH(NRX), .ROM_FILE(ROM_FILE)) rx (
     .clk(clk), .rst(rst), .dp_rst(rst_dp), .en(rx_run), .adc(adc), .inc(rx_inc),
@@ -370,10 +403,8 @@ module web888_core #(
   // ---------------------------------------------------------------- waterfall
   localparam [15:0] WF_ONESHOT_BURSTS = 16'd256;   // 8192 samples * 4 B / 128 B
 
-  wire        wf0_run, wf0_wv, wf0_done, wf0_ovf, wf0_bresp_err;
-  wire [31:0] wf0_bursts;
+  wire        wf0_wv;
   wire [63:0] wf0_wd;
-  wire [15:0] wf0_ptr;
 
   wf_ddc #(.ROM_FILE(ROM_FILE)) wf0 (
     .clk(clk), .rst(rst_dp), .en(wf0_run), .adc(adc), .inc(wf0_inc), .decim(wf0_decim),
@@ -423,10 +454,8 @@ module web888_core #(
     .m_axi_rlast(m_axi_wf0_rlast),
     .m_axi_rvalid(m_axi_wf0_rvalid));
 
-  wire        wf1_run, wf1_wv, wf1_done, wf1_ovf, wf1_bresp_err;
-  wire [31:0] wf1_bursts;
+  wire        wf1_wv;
   wire [63:0] wf1_wd;
-  wire [15:0] wf1_ptr;
 
   wf_ddc #(.ROM_FILE(ROM_FILE)) wf1 (
     .clk(clk), .rst(rst_dp), .en(wf1_run), .adc(adc), .inc(wf1_inc), .decim(wf1_decim),
@@ -475,6 +504,127 @@ module web888_core #(
     .m_axi_rresp(m_axi_wf1_rresp),
     .m_axi_rlast(m_axi_wf1_rlast),
     .m_axi_rvalid(m_axi_wf1_rvalid));
+
+  end else begin : pfb
+  // ---------------------------------------------------------------- channelizer
+  assign {rx_run, rx_done, rx_ovf, rx_seq_err, rx_bresp_err, rx_ptr, rx_frames,
+          rx_drops, rx_bursts} = 0;
+  assign {wf0_run, wf0_done, wf0_ovf, wf0_bresp_err, wf0_ptr, wf0_bursts} = 0;
+  assign {wf1_run, wf1_done, wf1_ovf, wf1_bresp_err, wf1_ptr, wf1_bursts} = 0;
+
+  wire [15:0] pfb_ctrl     = cfg[40*32 +: 16];         // 0xa0
+  wire        bins_en      = pfb_ctrl[0];
+  wire        power_en     = pfb_ctrl[1];
+  wire [3:0]  gen_req      = pfb_ctrl[7:4];
+  wire [31:0] bins_addr    = cfg[41*32 +: 32];         // 0xa4
+  wire [15:0] bins_len     = cfg[42*32 +: 16];         // 0xa8
+  wire [15:0] power_frames = cfg[42*32+16 +: 16];      // 0xaa
+  wire [31:0] power_addr   = cfg[43*32 +: 32];         // 0xac
+  wire [15:0] power_len    = cfg[44*32 +: 16];         // 0xb0
+
+  // the bin mask through the EV window: word w = bins 32w .. 32w + 31
+  wire mask_we = ev_valid && ev_idx < 10'd64;
+
+  pfb_top #(.COEF_PREFIX(PFB_COEF_PREFIX), .TW_PREFIX(PFB_TW_PREFIX),
+            .SPLIT_FILE(PFB_SPLIT_FILE)) pfb (
+    .clk(clk), .rst(rst), .adc(adc),
+    .bins_enable(bins_en), .mask_we(mask_we), .mask_addr(ev_idx[5:0]), .mask_data(ev_data),
+    .gen_req(gen_req), .gen(pfb_gen), .truncated(pfb_trunc),
+    .bins_addr(bins_addr), .bins_len_m1(bins_len), .bins_ptr(pfb_bins_ptr),
+    .bins_done(pfb_bins_done), .bins_overflow(pfb_bins_ovf), .bins_frames(pfb_bins_frames),
+    .bins_drops(pfb_bins_drops), .bins_bresp_err(pfb_bins_berr),
+    .power_enable(power_en), .power_frames(power_frames), .power_addr(power_addr),
+    .power_len_m1(power_len), .power_ptr(pfb_power_ptr), .power_done(pfb_power_done),
+    .power_overflow(pfb_power_ovf), .power_frames_out(pfb_power_lines),
+    .power_drops(pfb_power_drops), .power_bresp_err(pfb_power_berr),
+    .m_axi_bn_awid(m_axi_rx_awid),
+    .m_axi_bn_awaddr(m_axi_rx_awaddr),
+    .m_axi_bn_awlen(m_axi_rx_awlen),
+    .m_axi_bn_awsize(m_axi_rx_awsize),
+    .m_axi_bn_awburst(m_axi_rx_awburst),
+    .m_axi_bn_awlock(m_axi_rx_awlock),
+    .m_axi_bn_awcache(m_axi_rx_awcache),
+    .m_axi_bn_awprot(m_axi_rx_awprot),
+    .m_axi_bn_awqos(m_axi_rx_awqos),
+    .m_axi_bn_awvalid(m_axi_rx_awvalid),
+    .m_axi_bn_wid(m_axi_rx_wid),
+    .m_axi_bn_wdata(m_axi_rx_wdata),
+    .m_axi_bn_wstrb(m_axi_rx_wstrb),
+    .m_axi_bn_wlast(m_axi_rx_wlast),
+    .m_axi_bn_wvalid(m_axi_rx_wvalid),
+    .m_axi_bn_bready(m_axi_rx_bready),
+    .m_axi_bn_arid(m_axi_rx_arid),
+    .m_axi_bn_araddr(m_axi_rx_araddr),
+    .m_axi_bn_arlen(m_axi_rx_arlen),
+    .m_axi_bn_arsize(m_axi_rx_arsize),
+    .m_axi_bn_arburst(m_axi_rx_arburst),
+    .m_axi_bn_arlock(m_axi_rx_arlock),
+    .m_axi_bn_arcache(m_axi_rx_arcache),
+    .m_axi_bn_arprot(m_axi_rx_arprot),
+    .m_axi_bn_arqos(m_axi_rx_arqos),
+    .m_axi_bn_arvalid(m_axi_rx_arvalid),
+    .m_axi_bn_rready(m_axi_rx_rready),
+    .m_axi_bn_awready(m_axi_rx_awready),
+    .m_axi_bn_wready(m_axi_rx_wready),
+    .m_axi_bn_bid(m_axi_rx_bid),
+    .m_axi_bn_bresp(m_axi_rx_bresp),
+    .m_axi_bn_bvalid(m_axi_rx_bvalid),
+    .m_axi_bn_arready(m_axi_rx_arready),
+    .m_axi_bn_rid(m_axi_rx_rid),
+    .m_axi_bn_rdata(m_axi_rx_rdata),
+    .m_axi_bn_rresp(m_axi_rx_rresp),
+    .m_axi_bn_rlast(m_axi_rx_rlast),
+    .m_axi_bn_rvalid(m_axi_rx_rvalid),
+    .m_axi_pw_awid(m_axi_wf0_awid),
+    .m_axi_pw_awaddr(m_axi_wf0_awaddr),
+    .m_axi_pw_awlen(m_axi_wf0_awlen),
+    .m_axi_pw_awsize(m_axi_wf0_awsize),
+    .m_axi_pw_awburst(m_axi_wf0_awburst),
+    .m_axi_pw_awlock(m_axi_wf0_awlock),
+    .m_axi_pw_awcache(m_axi_wf0_awcache),
+    .m_axi_pw_awprot(m_axi_wf0_awprot),
+    .m_axi_pw_awqos(m_axi_wf0_awqos),
+    .m_axi_pw_awvalid(m_axi_wf0_awvalid),
+    .m_axi_pw_wid(m_axi_wf0_wid),
+    .m_axi_pw_wdata(m_axi_wf0_wdata),
+    .m_axi_pw_wstrb(m_axi_wf0_wstrb),
+    .m_axi_pw_wlast(m_axi_wf0_wlast),
+    .m_axi_pw_wvalid(m_axi_wf0_wvalid),
+    .m_axi_pw_bready(m_axi_wf0_bready),
+    .m_axi_pw_arid(m_axi_wf0_arid),
+    .m_axi_pw_araddr(m_axi_wf0_araddr),
+    .m_axi_pw_arlen(m_axi_wf0_arlen),
+    .m_axi_pw_arsize(m_axi_wf0_arsize),
+    .m_axi_pw_arburst(m_axi_wf0_arburst),
+    .m_axi_pw_arlock(m_axi_wf0_arlock),
+    .m_axi_pw_arcache(m_axi_wf0_arcache),
+    .m_axi_pw_arprot(m_axi_wf0_arprot),
+    .m_axi_pw_arqos(m_axi_wf0_arqos),
+    .m_axi_pw_arvalid(m_axi_wf0_arvalid),
+    .m_axi_pw_rready(m_axi_wf0_rready),
+    .m_axi_pw_awready(m_axi_wf0_awready),
+    .m_axi_pw_wready(m_axi_wf0_wready),
+    .m_axi_pw_bid(m_axi_wf0_bid),
+    .m_axi_pw_bresp(m_axi_wf0_bresp),
+    .m_axi_pw_bvalid(m_axi_wf0_bvalid),
+    .m_axi_pw_arready(m_axi_wf0_arready),
+    .m_axi_pw_rid(m_axi_wf0_rid),
+    .m_axi_pw_rdata(m_axi_wf0_rdata),
+    .m_axi_pw_rresp(m_axi_wf0_rresp),
+    .m_axi_pw_rlast(m_axi_wf0_rlast),
+    .m_axi_pw_rvalid(m_axi_wf0_rvalid));
+
+  // HP2 idle
+  assign {m_axi_wf1_awid, m_axi_wf1_awaddr, m_axi_wf1_awlen, m_axi_wf1_awsize,
+          m_axi_wf1_awburst, m_axi_wf1_awlock, m_axi_wf1_awcache, m_axi_wf1_awprot,
+          m_axi_wf1_awqos, m_axi_wf1_awvalid, m_axi_wf1_wid, m_axi_wf1_wdata,
+          m_axi_wf1_wstrb, m_axi_wf1_wlast, m_axi_wf1_wvalid, m_axi_wf1_arid,
+          m_axi_wf1_araddr, m_axi_wf1_arlen, m_axi_wf1_arsize, m_axi_wf1_arburst,
+          m_axi_wf1_arlock, m_axi_wf1_arcache, m_axi_wf1_arprot, m_axi_wf1_arqos,
+          m_axi_wf1_arvalid} = 0;
+  assign m_axi_wf1_bready = 1'b1;
+  assign m_axi_wf1_rready = 1'b1;
+  end endgenerate
 
   // ---------------------------------------------------------------- PPS
   wire [15:0] pps_count;
@@ -538,8 +688,11 @@ module web888_core #(
   end
 
   // ---------------------------------------------------------------- status
-  localparam [3:0] NRX4 = NRX;
-  wire [31:0] signature = {16'h0E5D, 4'd0, 4'd2, 4'd0, NRX4};
+  // [3:0] RX channels, [7:4] 1 = channelizer, [11:8] WF channels
+  localparam [3:0] NRX4 = PFB ? 0 : NRX;
+  localparam [3:0] NWF4 = PFB ? 0 : 2;
+  localparam [3:0] PFB4 = PFB ? 1 : 0;
+  wire [31:0] signature = {16'h0E5D, 4'd0, NWF4, PFB4, NRX4};
   wire [31:0] flags = {unlock_count, 3'd0, wf1_run, wf0_run, rx_run, dna_valid,
                        pll_locked, 1'b0, wf1_bresp_err, wf0_bresp_err,
                        rx_bresp_err, rx_seq_err, wf1_ovf, wf0_ovf, rx_ovf};
@@ -561,6 +714,15 @@ module web888_core #(
   assign sts[13*32 +: 32] = rx_drops;                   // 0x34
   assign sts[14*32 +: 32] = rx_bursts;                  // 0x38
   assign sts[15*32 +: 32] = {wf1_bursts[15:0], wf0_bursts[15:0]};  // 0x3c
+  generate if (PFB) begin : pfb_sts
+  assign sts[16*32 +: 32] = {pfb_power_ptr, pfb_bins_ptr};          // 0x40
+  assign sts[17*32 +: 32] = {23'd0, pfb_power_berr, pfb_power_ovf,  // 0x44
+                             pfb_bins_berr, pfb_bins_ovf, pfb_trunc, pfb_gen};
+  assign sts[18*32 +: 32] = pfb_bins_frames;                        // 0x48
+  assign sts[19*32 +: 32] = pfb_bins_drops;                         // 0x4c
+  assign sts[20*32 +: 32] = pfb_power_lines;                        // 0x50
+  assign sts[21*32 +: 32] = pfb_power_drops;                        // 0x54
+  end endgenerate
 
   // ---------------------------------------------------------------- outputs
   reg [8:0] gpio_r;
@@ -570,7 +732,8 @@ module web888_core #(
   assign adc_pga_o  = gpio_r[7];
   assign led_o      = gpio_r[8];
 
-  assign irq = {pps_edge, wf1_done, wf0_done, rx_done};
+  assign irq = PFB ? {pps_edge, 1'b0, pfb_power_done, pfb_bins_done}
+                   : {pps_edge, wf1_done, wf0_done, rx_done};
 
 endmodule
 

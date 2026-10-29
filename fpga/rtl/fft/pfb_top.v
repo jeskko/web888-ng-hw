@@ -30,6 +30,7 @@ module pfb_top #(
   input  wire [31:0] bins_addr,
   input  wire [15:0] bins_len_m1,
   output wire [15:0] bins_ptr,
+  output wire        bins_done,          // a burst written (interrupt)
   output wire        bins_overflow,
   output wire [31:0] bins_frames,
   output wire [31:0] bins_drops,
@@ -41,6 +42,7 @@ module pfb_top #(
   input  wire [31:0] power_addr,
   input  wire [15:0] power_len_m1,
   output wire [15:0] power_ptr,
+  output wire        power_done,
   output wire        power_overflow,
   output wire [31:0] power_frames_out,
   output wire [31:0] power_drops,
@@ -145,7 +147,7 @@ module pfb_top #(
 
   axi_ring_writer #(.FIFO_AW(9), .FRAME(NSEL + 1), .VARLEN(1)) bins_dma (
     .clk(clk), .rst(rst), .enable(bins_enable), .base_addr(bins_addr), .len_m1(bins_len_m1),
-    .oneshot(16'd0), .running(bn_run), .ptr(bins_ptr), .burst_done(),
+    .oneshot(16'd0), .running(bn_run), .ptr(bins_ptr), .burst_done(bins_done),
     .overflow(bins_overflow), .frames(bins_frames), .drops(bins_drops), .bursts(),
     .bresp_err(bins_bresp_err), .s_data(bn_d), .s_valid(bn_v), .s_first(bn_f),
     .m_axi_awid(m_axi_bn_awid),
@@ -198,7 +200,7 @@ module pfb_top #(
 
   axi_ring_writer #(.FIFO_AW(9), .FRAME(65), .VARLEN(1)) power_dma (
     .clk(clk), .rst(rst), .enable(power_enable), .base_addr(power_addr), .len_m1(power_len_m1),
-    .oneshot(16'd0), .running(pw_run), .ptr(power_ptr), .burst_done(),
+    .oneshot(16'd0), .running(pw_run), .ptr(power_ptr), .burst_done(power_done),
     .overflow(power_overflow), .frames(power_frames_out), .drops(power_drops), .bursts(),
     .bresp_err(power_bresp_err), .s_data(pw_d), .s_valid(pw_v), .s_first(pw_f),
     .m_axi_awid(m_axi_pw_awid),

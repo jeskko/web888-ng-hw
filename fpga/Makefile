@@ -4,7 +4,8 @@
 #   make sim         run all simulations (Icarus Verilog) + analysis
 #   make hf / vhf    build bitstreams with Vivado (PATH or local.mk)
 #   make ci          build both on the project's CI runner (scripts/ci-build.sh)
-#   make pfb         the channelizer datapath alone, out of context (Vivado)
+#   make pfb         the channelizer bitstream (web888_core PFB = 1)
+#   make pfb-ooc     the channelizer with its outputs alone, out of context
 
 # Host-specific tool paths go in local.mk (not versioned), e.g.
 #   IVERILOG = /opt/iverilog/bin/iverilog
@@ -21,7 +22,7 @@ RTL    := $(wildcard rtl/*.v) rtl/gen/rx_gain_rom.v
 TABLES := rtl/gen/sincos_qw.mem rtl/gen/rx_gain_rom.v
 SIMLIB := sim/models/unisim_models.v sim/axi_mem_slave.v
 
-.PHONY: all tables sim sim-nco sim-core sim-fft sim-split sim-fir sim-chain pfb hf vhf ci clean
+.PHONY: all tables sim sim-nco sim-core sim-core-pfb sim-fft sim-split sim-fir sim-chain pfb pfb-ooc hf vhf ci clean
 
 all: sim
 
@@ -29,7 +30,7 @@ tables: $(TABLES)
 $(TABLES): scripts/gen_tables.py
 	$(PYTHON) scripts/gen_tables.py
 
-sim: sim-nco sim-core sim-fft sim-split sim-fir sim-chain sim-out sim-top
+sim: sim-nco sim-core sim-core-pfb sim-fft sim-split sim-fir sim-chain sim-out sim-top
 
 sim/out:
 	mkdir -p $@
@@ -72,6 +73,12 @@ sim-top: | sim/out
 	cd sim && $(VVP) -n out/tb_top.vvp | tee out/tb_top.log
 	grep -q "tb_top: PASSED" sim/out/tb_top.log
 
+sim-core-pfb: $(TABLES) | sim/out
+	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_core_pfb.vvp sim/tb_core_pfb.v $(SIMLIB) $(RTL) \
+	  $(PFB_RTL) rtl/fft/pfb_select.v rtl/fft/pfb_power.v rtl/fft/pfb_top.v
+	cd sim && $(VVP) -n out/tb_core_pfb.vvp | tee out/tb_core_pfb.log
+	grep -q "tb_core_pfb: PASSED" sim/out/tb_core_pfb.log
+
 sim-core: $(TABLES) | sim/out
 	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_core.vvp sim/tb_core.v $(SIMLIB) $(RTL)
 	cd sim && $(VVP) -n out/tb_core.vvp | tee out/tb_core.log
@@ -81,12 +88,12 @@ sim-core: $(TABLES) | sim/out
 	$(PYTHON) sim/analyze.py wf  sim/out/wf0_mem.txt 4 6.0745e6
 	$(PYTHON) sim/analyze.py wf  sim/out/wf1_mem.txt 1 12.2005e6
 
-# the channelizer datapath alone (out of context): resources and timing
-pfb:
+# the channelizer with its outputs alone (out of context): resources and timing
+pfb-ooc:
 	mkdir -p build
-	$(VIVADO) -mode batch -nojournal -log build/pfb.log -source vivado/synth_pfb.tcl -tclargs $(JOBS)
+	$(VIVADO) -mode batch -nojournal -log build/pfb-ooc.log -source vivado/synth_pfb.tcl -tclargs $(JOBS)
 
-hf vhf: $(TABLES)
+hf vhf pfb: $(TABLES)
 	mkdir -p build
 	$(VIVADO) -mode batch -nojournal -log build/$@.log -source vivado/build.tcl -tclargs $@ $(JOBS)
 

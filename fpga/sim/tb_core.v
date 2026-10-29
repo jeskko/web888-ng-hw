@@ -296,9 +296,9 @@ module tb_core;
 
     // 2. corrupted token sequence at the backend output (one clock)
     @(posedge clk_out);
-    while (!(dut.rx.ov && dut.rx.op == 5'd6)) @(posedge clk_out);
-    #1 force dut.rx.op = 5'd9;
-    @(posedge clk_out); #1 release dut.rx.op;
+    while (!(dut.ddc.rx.ov && dut.ddc.rx.op == 5'd6)) @(posedge clk_out);
+    #1 force dut.ddc.rx.op = 5'd9;
+    @(posedge clk_out); #1 release dut.ddc.rx.op;
     repeat (20000) @(posedge clk_out);
     r32(STS + 32'h20, d);  check("rx seq_err flag", (d >> 3) & 1, 32'd1);
 
