@@ -123,6 +123,20 @@ set wrapper [make_wrapper -files [get_files system.bd] -top]
 add_files -norecurse $wrapper
 set_property top system_wrapper [current_fileset]
 
+# ---------------------------------------------------------------- synthesise
+# first on its own: a per-module utilisation report even if placement
+# fails (a resource over-used)
+launch_runs synth_1 -jobs $jobs
+wait_on_run synth_1
+if {[get_property PROGRESS [get_runs synth_1]] ne "100%"} {
+  error "synthesis failed"
+}
+open_run synth_1
+report_utilization -hierarchical -hierarchical_depth 6 \
+  -file [file join $build synth_utilization_hier.txt]
+report_utilization -file [file join $build synth_utilization.txt]
+close_design
+
 # ---------------------------------------------------------------- implement
 launch_runs impl_1 -to_step write_bitstream -jobs $jobs
 wait_on_run impl_1

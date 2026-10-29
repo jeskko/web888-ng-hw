@@ -88,6 +88,13 @@ jobs:
         with:
           name: channelizer
           path: pfb/
+      # synthesis utilisation (per module), also when implementation failed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: channelizer-synth
+          path: fpga/build/pfb/synth_utilization*.txt
 
   # Tags: publish the bitstreams as release assets (web888-ng-os fetches
   # them from there by checksum).
