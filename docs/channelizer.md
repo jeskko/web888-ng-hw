@@ -455,9 +455,29 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   stock RX registers; irq 2. Whole frames only: a pass emits if the ring
   was running when it began.
 * **Model and tests**: `scripts/tune_model.py` is bit-exact; `make
-  sim-tune` (32 users, edge cases, random bins: every word equal) and
-  `make sim-core-pfb` (through the registers: the −12 dBFS tone's user
-  reads 2^29 · 10^(−12/20), an empty one 0).
+  sim-tune` (32 users, edge cases, random bins, a ring restart mid-pass:
+  every word equal, whole frames) and `make sim-core-pfb` (through the
+  registers: the −12 dBFS tone's user reads 2^29 · 10^(−12/20), an empty
+  one 0).
+* **Capture as built**: a 64-deep LUT-RAM queue of {users matching,
+  sample}, the users handed to the mixer one a clock as their bins come
+  (a first version with 32 sample registers and a loadable shift
+  register took 5177 LUTs: the build at 118 %). The tuner: 1021 LUTs, 4
+  BRAM36 (its history), 0.5 (sincos), 8 DSP.
+* **Fitting the xc7z010**: with the tuner, synthesis moved the FIR's
+  history banks, then the ring FIFOs and the 1024-word FFT delay lines,
+  from block RAM to LUT RAM (over the 6000 there; global synthesis put
+  all banks there: 225 % LUTs). Pinned by `ram_style`: 22 of 23 FIR
+  banks, the bins and power FIFOs (`sync_fifo` STYLE), delay lines of
+  512 words and more; the tuner's FIFO 64 words in LUT RAM. The build:
+  LUT 87.5 % (synthesis), BRAM 56.5 of 60, LUT RAM 1855; WNS −0.316 ns
+  against the 7.6 ns guarded constraint (+0.22 ns against 8.138 ns), the
+  worst path a FIR bank's block RAM into a DSP.
+* **On the unit** (2026-10-29, `private/tune-test-kit`): 32 users at
+  12 kS/s, FT8 decodes, 20 mixed-view web sessions + 2 skimmers clean
+  (server `doc/m6-channelizer.md` §6). A ring restart mid-pass first
+  left the headerless ring a part-frame off (every channel another's
+  samples): fixed both in web888d and in the RTL.
 
 ## 4. Server side
 
