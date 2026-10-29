@@ -1,6 +1,9 @@
 // slcr_peek: print a few Zynq SLCR registers (PS side, read-only) that say
 // whether the PL can work: the PL resets, level shifters and PL clock 0.
 //   slcr_peek            the SLCR registers
+//   slcr_peek l2c        the L2 cache controller (PL310): control, aux
+//                        control and prefetch control (prefetching, early
+//                        BRESP, double linefill)
 //   slcr_peek gpio [N]   N samples (default 6), 0.5 s apart, of the EMIO GPIO
 //                        inputs (bank 2 DATA_RO) with the open bitstream's
 //                        liveness bits named (fpga/rtl/web888_core.v)
@@ -92,6 +95,16 @@ void _start_c(long *sp)
     int n = 6;
     if (argc >= 3) { n = 0; for (const char *c = argv[2]; *c >= '0' && *c <= '9'; c++) n = n * 10 + (*c - '0'); }
     gpio(fd, n);
+    sys6(SYS_exit, 0, 0, 0, 0, 0, 0);
+  }
+  if (argc >= 2 && eq(argv[1], "l2c")) {
+    volatile u32 *l = map(fd, 0xF8F02000u);
+    out("0xf8f02100 = "); hex(l[0x100 / 4]); out("  REG1_CONTROL (bit 0 = enabled)\n");
+    out("0xf8f02104 = "); hex(l[0x104 / 4]);
+    out("  REG1_AUX_CONTROL (28 data prefetch, 29 instr prefetch, 30 early BRESP)\n");
+    out("0xf8f02f60 = "); hex(l[0xf60 / 4]);
+    out("  REG15_PREFETCH_CTRL (28 data, 29 instr, 30 double linefill, 4:0 offset)\n");
+    out("0xf8f02f80 = "); hex(l[0xf80 / 4]); out("  REG15_POWER_CTRL\n");
     sys6(SYS_exit, 0, 0, 0, 0, 0, 0);
   }
   if (argc >= 2 && eq(argv[1], "swdt")) {
