@@ -64,6 +64,8 @@ jobs:
             cp fpga/build/$v/timing.txt out/timing_$v.txt
             cp fpga/build/$v/utilization.txt out/utilization_$v.txt
           done
+          # PS7 init (the same PS configuration in both)
+          mkdir out/ps7_init && cp fpga/build/hf/ps7_init* out/ps7_init/
           cd out && sha256sum websdr_*.bit > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:

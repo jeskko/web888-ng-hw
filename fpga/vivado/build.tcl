@@ -154,6 +154,12 @@ report_timing -setup -max_paths 50 -nworst 1 -sort_by group -file [file join $bu
 set wns [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]]
 puts "WNS: $wns ns"
 
+# the PS7 initialisation for our own boot loader (U-Boot SPL / FSBL):
+# DDR, MIO and clocks as this design configures the PS
+foreach f [glob -nocomplain [file join $build vivado web888_$variant.gen sources_1 bd system ip * ps7_init*]] {
+  file copy -force $f $build
+}
+
 set bit [glob [file join $build vivado web888_$variant.runs impl_1 *.bit]]
 file copy -force $bit [file join $build websdr_$variant.bit]
 puts "bitstream: [file join $build websdr_$variant.bit] (BUILD_ID [format 0x%08x $build_id])"
