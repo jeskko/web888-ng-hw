@@ -20,7 +20,7 @@ module sincos32 #(
 
   localparam integer LAT = 8;
 
-  reg [16:0] rom [0:1023];
+  (* rom_style = "block" *) reg [16:0] rom [0:1023];
   initial $readmemh(ROM_FILE, rom);
 
   wire [1:0]  q = ph[31:30];

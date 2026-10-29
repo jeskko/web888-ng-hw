@@ -197,7 +197,9 @@ module pfb_tune #(
   end
 
   // ---------------------------------------------------------------- history
-  reg [35:0] hist [0:NU*128-1];
+  // block RAM: 4 BRAM36 (as LUT RAM it would take 2304 RAMD64E, more than
+  // the channelizer build has left)
+  (* ram_style = "block" *) reg [35:0] hist [0:NU*128-1];
   initial for (i = 0; i < NU * 128; i = i + 1) hist[i] = 36'd0;
   wire [UW+6:0] h_waddr = {q_u, a_slot};
   always @(posedge clk)
