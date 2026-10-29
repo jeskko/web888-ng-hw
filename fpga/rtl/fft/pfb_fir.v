@@ -35,6 +35,7 @@ module pfb_fir #(
   parameter integer T    = 11,
   parameter integer LOGM = 12,
   parameter integer BSH  = 11,
+  parameter integer LUT_BANKS = 1,                  // history banks in LUT RAM
   parameter         COEF_PREFIX = "pfb_coef_"
 ) (
   input  wire                   clk,
@@ -103,15 +104,27 @@ module pfb_fir #(
   // stage 1: every bank reads word w; the taps' banks, coefficient words
   wire [2*WI-1:0] bank_q [0:NB-1];
   genvar b, t;
+  // Banks in block RAM (a BRAM36 each, fully used), the first LUT_BANKS in
+  // LUT RAM: pinned, since synthesis otherwise moves banks to LUT RAM as
+  // other block RAM users come (with the bins tuner, past the device's).
   generate
     for (b = 0; b < NB; b = b + 1) begin : g_bank
-      reg [2*WI-1:0] mem [0:D/2-1];
       reg [2*WI-1:0] q = 0;
-      always @(posedge clk)
-        if (ce) begin
-          if (jb == b && s[0]) mem[s[LD-1:1]] <= {held, adc};
-          q <= mem[w];
-        end
+      if (b < LUT_BANKS) begin : lut
+        (* ram_style = "distributed" *) reg [2*WI-1:0] mem [0:D/2-1];
+        always @(posedge clk)
+          if (ce) begin
+            if (jb == b && s[0]) mem[s[LD-1:1]] <= {held, adc};
+            q <= mem[w];
+          end
+      end else begin : bram
+        (* ram_style = "block" *) reg [2*WI-1:0] mem [0:D/2-1];
+        always @(posedge clk)
+          if (ce) begin
+            if (jb == b && s[0]) mem[s[LD-1:1]] <= {held, adc};
+            q <= mem[w];
+          end
+      end
       assign bank_q[b] = q;
     end
   endgenerate
