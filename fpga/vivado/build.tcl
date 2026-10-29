@@ -126,6 +126,8 @@ set_property top system_wrapper [current_fileset]
 # ---------------------------------------------------------------- synthesise
 # first on its own: a per-module utilisation report even if placement
 # fails (a resource over-used)
+# every block RAM tile is the synthesis' to use (the channelizer needs most)
+set_property STEPS.SYNTH_DESIGN.ARGS.MORE_OPTIONS {-max_bram 60} [get_runs synth_1]
 launch_runs synth_1 -jobs $jobs
 wait_on_run synth_1
 if {[get_property PROGRESS [get_runs synth_1]] ne "100%"} {
@@ -135,6 +137,8 @@ open_run synth_1
 report_utilization -hierarchical -hierarchical_depth 6 \
   -file [file join $build synth_utilization_hier.txt]
 report_utilization -file [file join $build synth_utilization.txt]
+# each memory's mapping (block or distributed), where the tool has it
+catch {report_ram_utilization -detail -file [file join $build synth_utilization_ram.txt]}
 close_design
 
 # ---------------------------------------------------------------- implement
