@@ -87,6 +87,10 @@ module pfb_tune #(
   end
 
   // ---------------------------------------------------------------- capture
+  // Each user's comparator; a bin some users want goes into a queue with
+  // the set of them (and the frame's last bin marks the frame's end), and
+  // the sequencer hands the users to the mixer one a clock. No per-user
+  // sample registers: at most NU + 1 entries a frame, a 64-deep queue.
   reg signed [24:0] r_re = 25'sd0, r_im = 25'sd0;
   reg [10:0]        r_k = 11'd0;
   reg               r_v = 1'b0;
@@ -94,51 +98,78 @@ module pfb_tune #(
     r_re <= in_re; r_im <= in_im; r_k <= in_k; r_v <= in_valid;
   end
 
-  reg [49:0] cap [0:NU-1];
-  reg [49:0] sh  [0:NU-1];
-  initial for (i = 0; i < NU; i = i + 1) begin cap[i] = 50'd0; sh[i] = 50'd0; end
-  reg eof = 1'b0;
+  reg [NU-1:0] mv = {NU{1'b0}};
+  reg [49:0]   mx = 50'd0;
+  reg          m_eof = 1'b0, m_v = 1'b0;
+  reg [6:0]    slot = 7'd0, m_slot = 7'd0;
   always @(posedge clk) begin
-    for (i = 0; i < NU; i = i + 1)
-      if (r_v && r_k == bin_r[i]) cap[i] <= {r_re, r_im};
-    eof <= r_v && r_k == 11'd2047;
+    for (i = 0; i < NU; i = i + 1) mv[i] <= r_v && r_k == bin_r[i];
+    mx     <= {r_re, r_im};
+    m_eof  <= r_v && r_k == 11'd2047;
+    m_v    <= r_v;
+    m_slot <= slot;
+    if (r_v && r_k == 11'd2047) slot <= slot + 7'd1;
   end
 
-  // ---------------------------------------------------------------- mixer
-  reg          a_busy = 1'b0;
-  reg [UW:0]   a_u = 0;
-  reg [6:0]    slot = 7'd0, a_slot = 7'd0;
-  reg [2:0]    m5 = 3'd0, a_m5 = 3'd0;
-  reg [31:0]   nfr = 32'd0, a_n = 32'd0;
-  reg [31:0]   p_r [0:NU-1];
-  initial for (i = 0; i < NU; i = i + 1) p_r[i] = 32'd0;
+  // the queue: {eof, slot, users, sample}, distributed RAM
+  localparam integer QW = 1 + 7 + NU + 50;
+  reg [QW-1:0] qm [0:63];
+  reg [6:0]    qw = 7'd0, qr = 7'd0;
+  wire         q_push = m_v && (|mv || m_eof);
+  wire         q_any = qw != qr;
+  always @(posedge clk)
+    if (q_push) begin
+      qm[qw[5:0]] <= {m_eof, m_slot, mv, mx};
+      qw <= qw + 7'd1;
+    end
 
-  wire [UW-1:0] u0 = a_u[UW-1:0];
-  wire [31:0]   pp = prst[u0] ? 32'd0 : p_r[u0];
-  wire          go = a_busy;
+  // the sequencer: an entry's users in order, then (the frame's last) its end
+  reg          cur_v = 1'b0, cur_eof = 1'b0;
+  reg [NU-1:0] cur_u = {NU{1'b0}};
+  reg [49:0]   cur_x = 50'd0;
+  reg [6:0]    cur_slot = 7'd0;
+  reg [UW-1:0] low;
+  always @(*) begin
+    low = 0;
+    for (i = NU - 1; i >= 0; i = i - 1) if (cur_u[i]) low = i;
+  end
 
+  reg          iss_v = 1'b0, iss_done = 1'b0;
+  reg [UW-1:0] iss_u = 0;
+  reg [49:0]   iss_x = 50'd0;
+  reg [6:0]    iss_slot = 7'd0;
   always @(posedge clk) begin
-    if (eof) begin
-      for (i = 0; i < NU; i = i + 1) sh[i] <= cap[i];
-      a_busy <= 1'b1;
-      a_u    <= 0;
-      a_slot <= slot;
-      a_m5   <= m5;
-      a_n    <= nfr;
-      slot   <= slot + 7'd1;
-      m5     <= m5 == 3'd4 ? 3'd0 : m5 + 3'd1;
-      nfr    <= nfr + 32'd1;
-    end else if (a_busy) begin
-      for (i = 0; i < NU - 1; i = i + 1) sh[i] <= sh[i + 1];
-      p_r[u0] <= en_r[u0] ? pp + pinc_r[u0] : pp;
-      a_u     <= a_u + 1'b1;
-      if (a_u == NU - 1) a_busy <= 1'b0;
+    iss_v    <= 1'b0;
+    iss_done <= 1'b0;
+    if (cur_v) begin
+      if (|cur_u) begin
+        iss_v    <= 1'b1;
+        iss_u    <= low;
+        iss_x    <= cur_x;
+        iss_slot <= cur_slot;
+        cur_u    <= cur_u & (cur_u - 1'b1);
+      end else begin
+        iss_done <= cur_eof;
+        iss_slot <= cur_slot;
+        cur_v    <= 1'b0;
+      end
+    end else if (q_any) begin
+      {cur_eof, cur_slot, cur_u, cur_x} <= qm[qr[5:0]];
+      cur_v <= 1'b1;
+      qr    <= qr + 7'd1;
     end
   end
 
+  // ---------------------------------------------------------------- mixer
+  reg [31:0] p_r [0:NU-1];
+  initial for (i = 0; i < NU; i = i + 1) p_r[i] = 32'd0;
+  wire [31:0] pp = prst[iss_u] ? 32'd0 : p_r[iss_u];
+  always @(posedge clk)
+    if (iss_v) p_r[iss_u] <= en_r[iss_u] ? pp + pinc_r[iss_u] : pp;
+
   // enables and phase restarts: a commit wins over the mixer's clear
   always @(posedge clk) begin
-    if (a_busy && !eof) prst[u0] <= 1'b0;
+    if (iss_v) prst[iss_u] <= 1'b0;
     if (c2_v) begin
       en_r[c2_u] <= c2_en;
       prst[c2_u] <= 1'b1;
@@ -148,19 +179,24 @@ module pfb_tune #(
   wire signed [17:0] cs, sn;
   sincos32 #(.ROM_FILE(ROM_FILE)) nco (.clk(clk), .ph(pp), .cos_o(cs), .sin_o(sn));
 
-  // the sample, its user and enable, alongside the lookup
+  // the sample, its user, enable, slot and the frame-end marker, alongside
+  // the lookup
   reg [49:0]   t_x  [0:LS-1];
   reg [UW-1:0] t_u  [0:LS-1];
-  reg [LS-1:0] t_v = {LS{1'b0}}, t_en = {LS{1'b0}};
-  initial for (i = 0; i < LS; i = i + 1) begin t_x[i] = 50'd0; t_u[i] = 0; end
+  reg [6:0]    t_s  [0:LS-1];
+  reg [LS-1:0] t_v = {LS{1'b0}}, t_en = {LS{1'b0}}, t_d = {LS{1'b0}};
+  initial for (i = 0; i < LS; i = i + 1) begin t_x[i] = 50'd0; t_u[i] = 0; t_s[i] = 0; end
   always @(posedge clk) begin
-    t_x[0] <= sh[0];
-    t_u[0] <= u0;
-    t_v    <= {t_v[LS-2:0], go && !eof};
-    t_en   <= {t_en[LS-2:0], en_r[u0]};
+    t_x[0] <= iss_x;
+    t_u[0] <= iss_u;
+    t_s[0] <= iss_slot;
+    t_v    <= {t_v[LS-2:0], iss_v};
+    t_d    <= {t_d[LS-2:0], iss_done};
+    t_en   <= {t_en[LS-2:0], en_r[iss_u]};
     for (i = 1; i < LS; i = i + 1) begin
       t_x[i] <= t_x[i - 1];
       t_u[i] <= t_u[i - 1];
+      t_s[i] <= t_s[i - 1];
     end
   end
 
@@ -171,14 +207,17 @@ module pfb_tune #(
   reg signed [42:0] p_rc = 43'sd0, p_is = 43'sd0, p_ic = 43'sd0, p_rs = 43'sd0;
   reg signed [43:0] y_r = 44'sd0, y_i = 44'sd0;
   reg               m1_v = 1'b0, m2_v = 1'b0, m1_en = 1'b0, m2_en = 1'b0;
+  reg               m1_d = 1'b0, m2_d = 1'b0;
   reg [UW-1:0]      m1_u = 0, m2_u = 0;
+  reg [6:0]         m1_s = 7'd0, m2_s = 7'd0;
   always @(posedge clk) begin
     p_rc <= xr * cs;  p_is <= xi * sn;
     p_ic <= xi * cs;  p_rs <= xr * sn;
     m1_v <= t_v[LS-1]; m1_en <= t_en[LS-1]; m1_u <= t_u[LS-1];
+    m1_d <= t_d[LS-1]; m1_s <= t_s[LS-1];
     y_r  <= p_rc + p_is;
     y_i  <= p_ic - p_rs;
-    m2_v <= m1_v; m2_en <= m1_en; m2_u <= m1_u;
+    m2_v <= m1_v; m2_en <= m1_en; m2_u <= m1_u; m2_d <= m1_d; m2_s <= m1_s;
   end
 
   wire signed [43:0] y_rr = (y_r + 44'sd4194304) >>> 23;
@@ -189,25 +228,36 @@ module pfb_tune #(
 
   reg [35:0]   q_d = 36'd0;
   reg          q_v = 1'b0;
-  reg [UW-1:0] q_u = 0;
+  reg [UW+6:0] q_a = 0;
   always @(posedge clk) begin
     q_d <= m2_en ? {sat18(y_rr), sat18(y_ir)} : 36'd0;
     q_v <= m2_v;
-    q_u <= m2_u;
+    q_a <= {m2_u, m2_s};
   end
 
   // ---------------------------------------------------------------- history
-  // block RAM: 4 BRAM36 (as LUT RAM it would take 2304 RAMD64E, more than
-  // the channelizer build has left)
-  (* ram_style = "block" *) reg [35:0] hist [0:NU*128-1];
-  initial for (i = 0; i < NU * 128; i = i + 1) hist[i] = 36'd0;
-  wire [UW+6:0] h_waddr = {q_u, a_slot};
-  always @(posedge clk)
-    if (q_v) hist[h_waddr] <= q_d;
+  // {user, frame mod 128}: 4096 x 36 bits, block RAM (4 BRAM36)
+  wire [UW+6:0] h_raddr;
+  wire [35:0]   h_rd;
+  tune_ram #(.W(36), .AW(UW + 7)) hist (
+    .clk(clk), .we(q_v), .waddr(q_a), .wdata(q_d), .raddr(h_raddr), .rdata(h_rd));
 
-  // the pass is done when its last user is written
-  reg a_done = 1'b0;
-  always @(posedge clk) a_done <= q_v && q_u == NU - 1;
+  // a frame is done when its end marker leaves the mixer (after all its
+  // users' writes): its number, slot and place among five
+  reg        a_done = 1'b0;
+  reg [6:0]  a_slot = 7'd0;
+  reg [2:0]  a_m5 = 3'd0, m5 = 3'd0;
+  reg [31:0] a_n = 32'd0, nfr = 32'd0;
+  always @(posedge clk) begin
+    a_done <= m2_d;
+    if (m2_d) begin
+      a_slot <= m2_s;
+      a_m5   <= m5;
+      a_n    <= nfr;
+      m5     <= m5 == 3'd4 ? 3'd0 : m5 + 3'd1;
+      nfr    <= nfr + 32'd1;
+    end
+  end
 
   // ---------------------------------------------------------------- decimator
   reg signed [17:0] coef [0:127];
@@ -239,12 +289,11 @@ module pfb_tune #(
 
   // read: history (2 clocks) and taps, aligned; then M, then the sum (a
   // tap issued in clock c is in M after c + 3: the tags' third stage)
-  wire [UW+6:0] h_raddr = {b_u, b_slot - b_j};
-  reg [35:0]  h_rd = 36'd0, h_rd2 = 36'd0;
+  assign h_raddr = {b_u, b_slot - b_j};
+  reg [35:0]  h_rd2 = 36'd0;
   reg signed [17:0] c_rd = 18'sd0, c_rd2 = 18'sd0;
   reg [2:0]   s_v = 3'd0, s_first = 3'd0, s_last = 3'd0;
   always @(posedge clk) begin
-    h_rd    <= hist[h_raddr];
     h_rd2   <= h_rd;
     c_rd    <= coef[b_j];
     c_rd2   <= c_rd;
@@ -276,6 +325,30 @@ module pfb_tune #(
     m_data  <= {o_i[31:0], o_r[31:0]};
   end
 
+endmodule
+
+// Simple dual-port block RAM (Vivado's template: write and registered read
+// in their own processes). Zero at power-up, as block RAM is.
+module tune_ram #(
+  parameter integer W  = 36,
+  parameter integer AW = 12
+) (
+  input  wire          clk,
+  input  wire          we,
+  input  wire [AW-1:0] waddr,
+  input  wire [W-1:0]  wdata,
+  input  wire [AW-1:0] raddr,
+  output reg  [W-1:0]  rdata
+);
+  (* ram_style = "block" *) reg [W-1:0] mem [0:(1 << AW) - 1];
+`ifndef SYNTHESIS
+  integer i;
+  initial for (i = 0; i < (1 << AW); i = i + 1) mem[i] = {W{1'b0}};
+`endif
+  always @(posedge clk)
+    if (we) mem[waddr] <= wdata;
+  always @(posedge clk)
+    rdata <= mem[raddr];
 endmodule
 
 `default_nettype wire
