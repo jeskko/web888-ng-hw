@@ -150,6 +150,7 @@ if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} {
 open_run impl_1
 report_utilization    -file [file join $build utilization.txt]
 report_timing_summary -file [file join $build timing.txt]
+report_timing -setup -max_paths 50 -nworst 1 -sort_by group -file [file join $build timing_paths.txt]
 set wns [get_property SLACK [get_timing_paths -max_paths 1 -nworst 1 -setup]]
 puts "WNS: $wns ns"
 

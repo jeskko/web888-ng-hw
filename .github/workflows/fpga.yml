@@ -81,6 +81,7 @@ jobs:
           mkdir pfb && echo "WNS $wns ns" > pfb/wns.txt
           cp fpga/build/pfb/websdr_pfb.bit pfb/
           cp fpga/build/pfb/timing.txt pfb/timing_pfb.txt
+          cp fpga/build/pfb/timing_paths.txt pfb/timing_paths_pfb.txt
           cp fpga/build/pfb/utilization.txt pfb/utilization_pfb.txt
           cd pfb && sha256sum websdr_pfb.bit > SHA256SUMS
       - uses: actions/upload-artifact@v4

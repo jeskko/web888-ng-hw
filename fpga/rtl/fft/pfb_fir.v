@@ -25,8 +25,12 @@
 // with its halves swapped.
 //
 // `out_valid` once 2T half-blocks have been filled; `out_odd` is the
-// frame's parity (the model's frame count). Latency: 5 + log2(T) clocks
+// frame's parity (the model's frame count). Latency: 6 + log2(T) clocks
 // after the frame's last sample to its first output.
+//
+// Every RAM and ROM output is registered twice (the block RAM's output
+// register): unregistered, a bank's 2.5 ns clock-to-out plus its fan-out
+// to the taps' bank muxes was the channelizer's critical path.
 
 module pfb_fir #(
   parameter integer WI   = 16,
@@ -109,7 +113,7 @@ module pfb_fir #(
   // other block RAM users come (with the bins tuner, past the device's).
   generate
     for (b = 0; b < NB; b = b + 1) begin : g_bank
-      reg [2*WI-1:0] q = 0;
+      reg [2*WI-1:0] q = 0, q2 = 0;
       if (b < LUT_BANKS) begin : lut
         (* ram_style = "distributed" *) reg [2*WI-1:0] mem [0:D/2-1];
         always @(posedge clk)
@@ -125,23 +129,32 @@ module pfb_fir #(
             q <= mem[w];
           end
       end
-      assign bank_q[b] = q;
+      always @(posedge clk)
+        if (ce) q2 <= q;
+      assign bank_q[b] = q2;
     end
   endgenerate
 
   // the word written holds {x[2w], x[2w+1]} = offsets {2w, 2w+1}; the even
   // branch takes offset 2w + 1, the odd branch offset 2w (see above)
+  // (stage 1a: the RAMs' read; 1: their output registers)
+  reg [BB-1:0] sel0 [0:T-1];
   reg [BB-1:0] sel1 [0:T-1];
-  reg [LD-1:0] k1 = 0;
-  reg          v1 = 1'b0, odd1 = 1'b0;
+  reg [LD-1:0] k0 = 0, k1 = 0;
+  reg          v0 = 1'b0, v1 = 1'b0, odd0 = 1'b0, odd1 = 1'b0;
   integer i;
   always @(posedge clk)
     if (ce) begin
-      for (i = 0; i < T; i = i + 1)
-        sel1[i] <= !hb ? base[i] : (base[i] == 0) ? NB - 1 : base[i] - 1'b1;
-      k1   <= k;
-      v1   <= (filled >= 2 * T);
-      odd1 <= jpar;
+      for (i = 0; i < T; i = i + 1) begin
+        sel0[i] <= !hb ? base[i] : (base[i] == 0) ? NB - 1 : base[i] - 1'b1;
+        sel1[i] <= sel0[i];
+      end
+      k0   <= k;
+      v0   <= (filled >= 2 * T);
+      odd0 <= jpar;
+      k1   <= k0;
+      v1   <= v0;
+      odd1 <= odd0;
     end
 
   // coefficients: ROM r serves taps r and T - 1 - r
@@ -151,15 +164,17 @@ module pfb_fir #(
     for (t = 0; t < NR; t = t + 1) begin : g_rom
       localparam [7:0] DIGIT = 8'h30 + t;   // T <= 19: one digit
       reg [2*CB-1:0] rom [0:D-1];
-      reg [2*CB-1:0] qa = 0, qb = 0;
+      reg [2*CB-1:0] qa = 0, qb = 0, qa2 = 0, qb2 = 0;
       initial $readmemh({COEF_PREFIX, DIGIT, ".mem"}, rom);
       always @(posedge clk)
         if (ce) begin
-          qa <= rom[k];
-          qb <= rom[~k];                  // D - 1 - k
+          qa  <= rom[k];
+          qb  <= rom[~k];                 // D - 1 - k
+          qa2 <= qa;
+          qb2 <= qb;
         end
-      assign rom_a[t] = qa;
-      assign rom_b[t] = qb;
+      assign rom_a[t] = qa2;
+      assign rom_b[t] = qb2;
     end
   endgenerate
 
