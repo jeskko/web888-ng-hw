@@ -12,6 +12,33 @@
 	.globl	cb_reloc_start
 	.globl	cb_reloc_end
 cb_reloc_start:
+	@ First quiet the old kernel's DMA masters: a controller it left
+	@ running (the GEM's receive ring, with traffic on the LAN) writes into
+	@ the new kernel's memory (seen on the unit: a corrupt squashfs root,
+	@ and the GEM never sent). Pulse the SLCR resets of the DMAC, both USB,
+	@ GEM and SDIO controllers; the new kernel finds them as after a boot.
+	movw	r0, #0x0000
+	movt	r0, #0xf800		@ SLCR
+	movw	r1, #0xdf0d
+	str	r1, [r0, #0x008]	@ SLCR_UNLOCK
+	mov	r1, #0x01
+	str	r1, [r0, #0x20c]	@ DMAC_RST_CTRL
+	mov	r1, #0x03
+	str	r1, [r0, #0x210]	@ USB_RST_CTRL (CPU_1x)
+	mov	r1, #0xf3
+	str	r1, [r0, #0x214]	@ GEM_RST_CTRL (CPU_1x, RX, ref)
+	mov	r1, #0x33
+	str	r1, [r0, #0x218]	@ SDIO_RST_CTRL (CPU_1x, ref)
+	dsb
+	mov	r2, #0x10000		@ hold the resets a while
+4:	subs	r2, r2, #1
+	bne	4b
+	mov	r1, #0
+	str	r1, [r0, #0x20c]
+	str	r1, [r0, #0x210]
+	str	r1, [r0, #0x214]
+	str	r1, [r0, #0x218]
+	dsb
 	adr	r12, cb_reloc_data
 	ldr	r4, [r12]		@ the list
 1:	ldr	r5, [r4], #4		@ dst; 0 ends the list
