@@ -122,6 +122,8 @@ static void t_basic(void)
 	nrx = sig & 0xf;
 	ext = (sig >> 16) == 0x0e5d;
 	pfb = ext && ((sig >> 4) & 0xf) == 1;
+	if (pfb)	/* the bins tuner's users, [7:4] in [15:12] */
+		nrx |= (sig >> 8) & 0xf0;
 	CHECK(ioctl(fd, ZSDR_GET_DNA, &dna) == 0 && dna,
 	      "GET_DNA 0x%014llx", (unsigned long long)dna);
 	CHECK(stats(&st) == 0 && st.size == sizeof(st) && st.signature == sig &&
@@ -144,8 +146,12 @@ static void t_basic(void)
 	CHECK(ioctl(fd, _IO(ZSDR_IOC_TYPE, 0x3f)) < 0 && errno == ENOTTY,
 	      "unknown ioctl: ENOTTY");
 	if (pfb) {
-		CHECK(ioctl(fd, ZSDR_RX_START, 5) < 0 && errno == EOPNOTSUPP,
-		      "channelizer: RX_START EOPNOTSUPP");
+		if (nrx)
+			CHECK(ioctl(fd, ZSDR_RX_START, 5) < 0 && errno == EINVAL,
+			      "channelizer tuner: RX_START 5 EINVAL (40 only)");
+		else
+			CHECK(ioctl(fd, ZSDR_RX_START, 5) < 0 && errno == EOPNOTSUPP,
+			      "channelizer: RX_START EOPNOTSUPP");
 		CHECK(ioctl(fd, ZSDR_WF_START, 0) < 0 && errno == EOPNOTSUPP,
 		      "channelizer: WF_START EOPNOTSUPP");
 		return;
@@ -740,6 +746,45 @@ static void front_end_default(void)
 	ioctl(fd, ZSDR_CLK_SET, 1);
 }
 
+/* the channelizer's bins tuner as RX: 12 kS/s, user 0 on 40 m, user 1 off */
+static void t_tune(void)
+{
+	static int32_t buf[RING / 4];
+	struct zsdr_rx_param p0 = { .channel = 0,
+				    .freq = (uint64_t)(7.074e6 / 122.88e6 * 281474976710656.0) };
+	struct zsdr_rx_param p1 = { .channel = 1, .freq = 0 };
+	struct zsdr_rx_param bad = { .channel = nrx, .freq = 1 };
+	long fb = 8 * nrx, got = 0, n, i, frames;
+	double t0, t, pw0 = 0, pw1 = 0;
+
+	CHECK(ioctl(fd, ZSDR_RX_PARAM, &bad) < 0 && errno == EINVAL,
+	      "tuner: RX_PARAM user %u EINVAL", nrx);
+	CHECK(ioctl(fd, ZSDR_RX_PARAM, &p0) == 0 && ioctl(fd, ZSDR_RX_PARAM, &p1) == 0,
+	      "tuner: RX_PARAM users 0 (7.074 MHz), 1 (off)");
+	CHECK(ioctl(fd, ZSDR_RX_START, 40) == 0, "tuner: RX_START 40");
+	t0 = now();
+	while ((t = now() - t0) < 1.0 && got + fb <= (long)sizeof(buf)) {
+		wait_ev(POLLIN, 200);
+		n = rx_read((char *)buf + got, sizeof(buf) - got);
+		if (n < 0)
+			break;
+		got += n;
+	}
+	frames = got / fb;
+	CHECK(got % fb == 0 && fabs(frames / t - 12000) < 600,
+	      "tuner: %ld frames in %.2f s (%.0f/s, 12000 due)", frames, t, frames / t);
+	for (i = frames / 2; i < frames; i++) {
+		double r0 = buf[i * 2 * nrx], q0 = buf[i * 2 * nrx + 1];
+		double r1 = buf[i * 2 * nrx + 2], q1 = buf[i * 2 * nrx + 3];
+
+		pw0 += r0 * r0 + q0 * q0;
+		pw1 += r1 * r1 + q1 * q1;
+	}
+	CHECK(pw0 > 0 && pw1 == 0, "tuner: user 0 %.1f dB (of 2^29), user 1 off reads 0",
+	      10 * log10(pw0 / (frames - frames / 2) / 288230376151711744.0 + 1e-30));
+	ioctl(fd, ZSDR_RX_START, 40);	/* the next test starts afresh */
+}
+
 static void t_pfb(void)
 {
 	struct zsdr_pfb_info in = { 0 };
@@ -915,6 +960,8 @@ int main(int argc, char **argv)
 		return bench(bench_secs, r2, adc, wf_decim);
 	t_basic();
 	if (pfb) {
+		if (nrx)
+			t_tune();
 		t_pfb();
 		front_end_default();
 		close(fd);
