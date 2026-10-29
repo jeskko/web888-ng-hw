@@ -422,6 +422,43 @@ the room for the longest one.
   against `power.hex`) and `make sim-top` (ADC samples to both rings in
   AXI memory models with random backpressure, read back and compared).
 
+### 3.8 The bins tuner (2026-10-29)
+
+On the A9, web888d on bins tops out at 10-14 listeners with waterfalls
+(server `doc/m6-channelizer.md` §6): reading 64 bins at 60 kS/s, and
+turning and decimating each user's bin, take most of both cores. The
+tuner (`rtl/fft/pfb_tune.v`, `TUNE` = 32 users) does the per-user part
+in the PL and hands 12 kS/s receivers to the stock RX ring, so the CPU
+gets the audio rate (32 users: 3 MB/s) instead of the bins.
+
+* **Tuning**: a user is a 48-bit frequency word (the stock RX NCO's,
+  f / fs × 2^48). Its bin is k = round(inc / 2^36), its offset from the
+  bin's centre a 32-bit phase step at the 60 kHz frame rate, pinc =
+  (inc − k·2^36) >> 5. Written through the EV window after the mask;
+  the high word commits and restarts the user's phase.
+* **Capture**: each user's comparator keeps its bin's sample as the
+  chain's bins stream past (no frame buffer); at the frame's end all go
+  to a shift register.
+* **Mixer** (a user a clock, 32 clocks a frame): `sincos32.v` (`nco.v`'s
+  table and Taylor step on a 32-bit phase), x · e^−jp, rounded at 2^−23
+  and saturated to 18 bits (headroom to −6 dBFS; the step 2^6 bin units:
+  −128 dBFS in 2.4 kHz, under the ADC's floor), into a 128-sample history
+  per user ({user, frame mod 128}: 4096 × 36 bits, 4 BRAM36).
+* **Decimator**: after every 5th frame, 120 taps per user (Kaiser, pass
+  4.8 kHz, stop 7.2 kHz, ~76 dB; `tune_fir.mem`, DC gain 2^18) on two
+  multipliers, one tap a clock: 3840 clocks of the 10 240 between
+  outputs. out = (acc + 2^6) >> 7: a full-scale sine reads 2^29, as RX
+  samples. AM's ±5 kHz edges fall in the transition band (a fraction of
+  a dB down).
+* **Out**: a frame of 32 `{Q, I}` words per output instant to an
+  `axi_ring_writer` on HP2 (idle in the channelizer build), through the
+  stock RX registers; irq 2. Whole frames only: a pass emits if the ring
+  was running when it began.
+* **Model and tests**: `scripts/tune_model.py` is bit-exact; `make
+  sim-tune` (32 users, edge cases, random bins: every word equal) and
+  `make sim-core-pfb` (through the registers: the −12 dBFS tone's user
+  reads 2^29 · 10^(−12/20), an empty one 0).
+
 ## 4. Server side
 
 * New backend next to the stock-driver one: the `Radio` trait gains (or

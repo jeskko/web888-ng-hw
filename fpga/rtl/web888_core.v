@@ -17,9 +17,13 @@
 //
 // PFB = 1 builds the channelizer instead of the RX and waterfall chains
 // (docs/channelizer.md): its bins ring on m_axi_rx (HP0), its power line
-// ring on m_axi_wf0 (HP1), m_axi_wf1 idle; its registers follow the stock
-// ones (CFG 0xa0.., STS 0x40..) and the bin mask is written through the
-// EV window (base + 0x3000000).
+// ring on m_axi_wf0 (HP1); its registers follow the stock ones (CFG
+// 0xa0.., STS 0x40..) and the bin mask is written through the EV window
+// (base + 0x3000000, words 0..63). With TUNE users, the bins tuner
+// (pfb_tune, docs/channelizer.md §3.8) is the RX: 12 kS/s receivers from
+// the bins, frequencies through EV words 64 + 2u (low) and 65 + 2u
+// ({enable, high 16 bits}), its ring through the stock RX registers and
+// status on m_axi_wf1 (HP2), its interrupt in RX's place (irq 2).
 
 module web888_core #(
   parameter integer NRX             = 12,      // hf build 12, vhf build 13 (as stock); max 13 (CFG slots)
@@ -28,8 +32,10 @@ module web888_core #(
   parameter integer BUILD_ID        = 0,         // e.g. 32'h20261016, reported at STS 0x18
   parameter         ROM_FILE        = "sincos_qw.mem",
   parameter integer PFB             = 0,         // 1: the channelizer build
+  parameter integer TUNE            = 32,        // PFB: the bins tuner's users (0: none)
   // the channelizer's ROM tables (rtl/gen; Vivado finds them by name, a
   // simulation passes paths)
+  parameter         TUNE_COEF_FILE  = "tune_fir.mem",
   parameter         PFB_COEF_PREFIX = "pfb_coef_",
   parameter         PFB_TW_PREFIX   = "pfb_tw_",
   parameter         PFB_SPLIT_FILE  = "pfb_split_tw.mem"
@@ -507,8 +513,11 @@ module web888_core #(
 
   end else begin : pfb
   // ---------------------------------------------------------------- channelizer
-  assign {rx_run, rx_done, rx_ovf, rx_seq_err, rx_bresp_err, rx_ptr, rx_frames,
+  assign rx_seq_err = 1'b0;
+  if (TUNE == 0) begin : no_tune
+  assign {rx_run, rx_done, rx_ovf, rx_bresp_err, rx_ptr, rx_frames,
           rx_drops, rx_bursts} = 0;
+  end
   assign {wf0_run, wf0_done, wf0_ovf, wf0_bresp_err, wf0_ptr, wf0_bursts} = 0;
   assign {wf1_run, wf1_done, wf1_ovf, wf1_bresp_err, wf1_ptr, wf1_bursts} = 0;
 
@@ -524,10 +533,14 @@ module web888_core #(
 
   // the bin mask through the EV window: word w = bins 32w .. 32w + 31
   wire mask_we = ev_valid && ev_idx < 10'd64;
+  wire signed [24:0] ch_re, ch_im;
+  wire [10:0]        ch_k;
+  wire               ch_valid;
 
   pfb_top #(.COEF_PREFIX(PFB_COEF_PREFIX), .TW_PREFIX(PFB_TW_PREFIX),
             .SPLIT_FILE(PFB_SPLIT_FILE)) pfb (
     .clk(clk), .rst(rst), .adc(adc),
+    .bins_re(ch_re), .bins_im(ch_im), .bins_k(ch_k), .bins_valid(ch_valid),
     .bins_enable(bins_en), .mask_we(mask_we), .mask_addr(ev_idx[5:0]), .mask_data(ev_data),
     .gen_req(gen_req), .gen(pfb_gen), .truncated(pfb_trunc),
     .bins_addr(bins_addr), .bins_len_m1(bins_len), .bins_ptr(pfb_bins_ptr),
@@ -614,6 +627,60 @@ module web888_core #(
     .m_axi_pw_rlast(m_axi_wf0_rlast),
     .m_axi_pw_rvalid(m_axi_wf0_rvalid));
 
+  if (TUNE > 0) begin : tune
+  // ---- the bins tuner: the RX of this build, on HP2
+  wire        tn_we = ev_valid && ev_idx >= 10'd64 && ev_idx < 10'd64 + 2 * TUNE;
+  wire [63:0] tn_d;
+  wire        tn_v;
+  pfb_tune #(.NU(TUNE), .COEF_FILE(TUNE_COEF_FILE), .ROM_FILE(ROM_FILE)) tuner (
+    .clk(clk), .in_re(ch_re), .in_im(ch_im), .in_k(ch_k), .in_valid(ch_valid),
+    .cfg_we(tn_we), .cfg_idx(ev_idx[5:0]), .cfg_data(ev_data),
+    .run(rx_run), .m_data(tn_d), .m_valid(tn_v), .m_frame());
+
+  axi_ring_writer #(.FIFO_AW(9), .FRAME(TUNE)) tune_dma (
+    .clk(clk), .rst(rst), .enable(rx_en), .base_addr(rx_addr), .len_m1(rx_len),
+    .oneshot(16'd0), .running(rx_run), .ptr(rx_ptr), .burst_done(rx_done),
+    .overflow(rx_ovf), .frames(rx_frames), .drops(rx_drops), .bursts(rx_bursts),
+    .bresp_err(rx_bresp_err), .s_data(tn_d), .s_valid(tn_v), .s_first(1'b0),
+    .m_axi_awid(m_axi_wf1_awid),
+    .m_axi_awaddr(m_axi_wf1_awaddr),
+    .m_axi_awlen(m_axi_wf1_awlen),
+    .m_axi_awsize(m_axi_wf1_awsize),
+    .m_axi_awburst(m_axi_wf1_awburst),
+    .m_axi_awlock(m_axi_wf1_awlock),
+    .m_axi_awcache(m_axi_wf1_awcache),
+    .m_axi_awprot(m_axi_wf1_awprot),
+    .m_axi_awqos(m_axi_wf1_awqos),
+    .m_axi_awvalid(m_axi_wf1_awvalid),
+    .m_axi_wid(m_axi_wf1_wid),
+    .m_axi_wdata(m_axi_wf1_wdata),
+    .m_axi_wstrb(m_axi_wf1_wstrb),
+    .m_axi_wlast(m_axi_wf1_wlast),
+    .m_axi_wvalid(m_axi_wf1_wvalid),
+    .m_axi_bready(m_axi_wf1_bready),
+    .m_axi_arid(m_axi_wf1_arid),
+    .m_axi_araddr(m_axi_wf1_araddr),
+    .m_axi_arlen(m_axi_wf1_arlen),
+    .m_axi_arsize(m_axi_wf1_arsize),
+    .m_axi_arburst(m_axi_wf1_arburst),
+    .m_axi_arlock(m_axi_wf1_arlock),
+    .m_axi_arcache(m_axi_wf1_arcache),
+    .m_axi_arprot(m_axi_wf1_arprot),
+    .m_axi_arqos(m_axi_wf1_arqos),
+    .m_axi_arvalid(m_axi_wf1_arvalid),
+    .m_axi_rready(m_axi_wf1_rready),
+    .m_axi_awready(m_axi_wf1_awready),
+    .m_axi_wready(m_axi_wf1_wready),
+    .m_axi_bid(m_axi_wf1_bid),
+    .m_axi_bresp(m_axi_wf1_bresp),
+    .m_axi_bvalid(m_axi_wf1_bvalid),
+    .m_axi_arready(m_axi_wf1_arready),
+    .m_axi_rid(m_axi_wf1_rid),
+    .m_axi_rdata(m_axi_wf1_rdata),
+    .m_axi_rresp(m_axi_wf1_rresp),
+    .m_axi_rlast(m_axi_wf1_rlast),
+    .m_axi_rvalid(m_axi_wf1_rvalid));
+  end else begin : hp2_idle
   // HP2 idle
   assign {m_axi_wf1_awid, m_axi_wf1_awaddr, m_axi_wf1_awlen, m_axi_wf1_awsize,
           m_axi_wf1_awburst, m_axi_wf1_awlock, m_axi_wf1_awcache, m_axi_wf1_awprot,
@@ -624,6 +691,7 @@ module web888_core #(
           m_axi_wf1_arvalid} = 0;
   assign m_axi_wf1_bready = 1'b1;
   assign m_axi_wf1_rready = 1'b1;
+  end
   end endgenerate
 
   // ---------------------------------------------------------------- PPS
@@ -688,11 +756,13 @@ module web888_core #(
   end
 
   // ---------------------------------------------------------------- status
-  // [3:0] RX channels, [7:4] 1 = channelizer, [11:8] WF channels
-  localparam [3:0] NRX4 = PFB ? 0 : NRX;
+  // [3:0] RX channels, [7:4] 1 = channelizer, [11:8] WF channels; the
+  // channelizer build's RX channels are the tuner's users, their high bits
+  // in [15:12]
+  localparam [7:0] NRX8 = PFB ? TUNE : NRX;
   localparam [3:0] NWF4 = PFB ? 0 : 2;
   localparam [3:0] PFB4 = PFB ? 1 : 0;
-  wire [31:0] signature = {16'h0E5D, 4'd0, NWF4, PFB4, NRX4};
+  wire [31:0] signature = {16'h0E5D, NRX8[7:4], NWF4, PFB4, NRX8[3:0]};
   wire [31:0] flags = {unlock_count, 3'd0, wf1_run, wf0_run, rx_run, dna_valid,
                        pll_locked, 1'b0, wf1_bresp_err, wf0_bresp_err,
                        rx_bresp_err, rx_seq_err, wf1_ovf, wf0_ovf, rx_ovf};
@@ -732,7 +802,7 @@ module web888_core #(
   assign adc_pga_o  = gpio_r[7];
   assign led_o      = gpio_r[8];
 
-  assign irq = PFB ? {pps_edge, 1'b0, pfb_power_done, pfb_bins_done}
+  assign irq = PFB ? {pps_edge, rx_done, pfb_power_done, pfb_bins_done}
                    : {pps_edge, wf1_done, wf0_done, rx_done};
 
 endmodule

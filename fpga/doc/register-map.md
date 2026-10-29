@@ -39,7 +39,7 @@ any outstanding bursts drain), latching address/length/mode at that moment.
 
 | offset | width | field |
 |---|---|---|
-| 0x00 | u32 | signature: [3:0] RX channels (hf build 12, vhf build 13, as stock; `NRX` ≤ 13), [7:4] 1 = the channelizer build (below; then 0 RX and 0 WF: 0x0E5D0010), [11:8] WF channels (2), [31:16] 0x0E5D = open design |
+| 0x00 | u32 | signature: [3:0] RX channels (hf build 12, vhf build 13, as stock; `NRX` ≤ 13), [7:4] 1 = the channelizer build (below; then 0 WF and its RX channels are the bins tuner's users, their bits [7:4] in [15:12]: 0x0E5D2010 with 32, 0x0E5D0010 without a tuner), [11:8] WF channels (2), [31:16] 0x0E5D = open design |
 | 0x04 | u16 | RX ring write pointer (completed bursts) |
 | 0x06 | u16 | WF0 ring write pointer |
 | 0x08 | u16 | WF1 ring write pointer |
@@ -133,15 +133,15 @@ then got a continuous stream: at decimation 1 that is 491 MB/s, more than
 the HP port takes. Still to confirm against the stock bitstream on
 hardware (`docs/hardware-test-plan.md`).
 
-## The channelizer build (signature 0x0E5D0010)
+## The channelizer build (signature 0x0E5D2010; 0x0E5D0010 without the tuner)
 
 `web888_core` with `PFB = 1` (`make pfb`, `websdr_pfb.bit`;
 `docs/channelizer.md` §3.7) has the polyphase channelizer instead of the
 RX and waterfall chains: 2048 bins of 30 kHz at 60 kS/s, at most 64 of
 them selected per frame, and a full-band power line. The shared registers
 keep their places (GPIO 0x84, PPS, DNA, build id, ADC monitors, flags);
-the RX/WF fields read 0. Its bins ring goes out on HP0, its power line
-ring on HP1; HP2 is idle. 122.88 MHz (HF) only.
+the WF fields read 0. Its bins ring goes out on HP0, its power line
+ring on HP1, the bins tuner's ring (below) on HP2. 122.88 MHz (HF) only.
 
 CFG:
 
@@ -181,4 +181,23 @@ or dropped whole):
   128c + 127, the even bin low; IEEE float32, mantissa truncated).
 
 Interrupts: IRQ_F2P[0] a bins burst written, [1] a power burst written,
-[3] PPS edge.
+[2] a tuner burst written, [3] PPS edge.
+
+### The bins tuner (`TUNE` users, 32)
+
+Receivers at 12 kS/s from the bins (`docs/channelizer.md` §3.8): each
+user is a frequency; its bin's samples are turned to 0 Hz at the dial and
+decimated by 5 (pass ±4.8 kHz, stop from 7.2 kHz, ~76 dB). It takes the
+stock RX's place in the registers, so it reads like RX channels:
+
+* frequency of user u: EV window words 64 + 2u (the 48-bit phase step's
+  low 32 bits) and 65 + 2u (`{enable, 15'd0, high 16 bits}`; this write
+  commits, and the user's phase restarts). The phase step is the stock RX
+  NCOs': f / 122.88 MHz × 2^48. Users with enable 0 read 0.
+* ring: the stock RX registers, CFG 0x00 bit 0 (on), 0x8C (address),
+  0x90 (length − 1, bursts); 0x02 (R2) is ignored (always 12 kS/s).
+* status: STS 0x04 [15:0] write pointer, 0x30 frames, 0x34 dropped, 0x38
+  bursts, flags (0x20) as RX's.
+* frames: `TUNE` words, user 0 first, `{Q[31:0], I[31:0]}` (I low; a
+  full-scale sine reads 2^29, as RX samples); no header, as the stock RX
+  ring. A frame is written whole or dropped whole.

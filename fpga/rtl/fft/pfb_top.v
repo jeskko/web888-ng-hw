@@ -19,6 +19,12 @@ module pfb_top #(
   input  wire        rst,
   input  wire signed [15:0] adc,
 
+  // the chain's bins as they come (k = 0..N-1 a frame), for the tuner
+  output wire signed [24:0] bins_re,
+  output wire signed [24:0] bins_im,
+  output wire [10:0]        bins_k,
+  output wire               bins_valid,
+
   // bins: the mask (pfb_select), the ring
   input  wire        bins_enable,
   input  wire        mask_we,
@@ -133,6 +139,10 @@ module pfb_top #(
   pfb_chain #(.COEF_PREFIX(COEF_PREFIX), .TW_PREFIX(TW_PREFIX), .SPLIT_FILE(SPLIT_FILE)) chain (
     .clk(clk), .ce(1'b1), .adc(adc),
     .out_re(re), .out_im(im), .out_k(k), .out_valid(valid), .out_frame(frame));
+  assign bins_re = re;
+  assign bins_im = im;
+  assign bins_k = k;
+  assign bins_valid = valid;
 
   // ---- bins
   wire        bn_run;

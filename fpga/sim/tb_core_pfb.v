@@ -6,6 +6,9 @@
 // ring on HP0 and the power line ring on HP1, the STS counters and the
 // interrupts. A 3.0 MHz tone must show in bin 100 (30 kHz bins) in both
 // streams. The datapath's values are tb_top's (bit-exact to the model).
+// The bins tuner (tb_tune: bit-exact) through its registers: two users
+// through the EV window, its ring on HP2 through the stock RX registers,
+// the tone's user far above the empty one, irq 2.
 
 module tb_core_pfb;
 
@@ -85,7 +88,8 @@ module tb_core_pfb;
     .m_axi_``p``_rvalid(1'b0), .m_axi_``p``_rready(p``_rready)
 
   web888_core #(.ROM_FILE("../rtl/gen/sincos_qw.mem"), .BUILD_ID(32'h2026_1029),
-                .PFB(1), .PFB_COEF_PREFIX("../rtl/gen/pfb_coef_"),
+                .PFB(1), .TUNE_COEF_FILE("../rtl/gen/tune_fir.mem"),
+                .PFB_COEF_PREFIX("../rtl/gen/pfb_coef_"),
                 .PFB_TW_PREFIX("../rtl/gen/pfb_tw_"),
                 .PFB_SPLIT_FILE("../rtl/gen/pfb_split_tw.mem")) dut (
     .adc_clk_p_i(adc_clk), .adc_clk_n_i(~adc_clk), .adc_dat_a_i(adc_dat), .adc_ofl_i(1'b0),
@@ -160,14 +164,26 @@ module tb_core_pfb;
   localparam [31:0] EV = 32'h4300_0000;
   localparam integer PW_BASE = 32'h0001_0000;     // power ring (byte address)
   integer errors = 0;
-  integer i, f, irq_bins = 0, irq_power = 0;
+  integer i, f, irq_bins = 0, irq_power = 0, irq_tune = 0;
+  localparam integer TN_BASE = 32'h0002_0000;     // tuner ring (byte address)
   reg [31:0] d;
   reg [63:0] w;
 
   always @(posedge clk_out) begin
     if (irq[0]) irq_bins = irq_bins + 1;
     if (irq[1]) irq_power = irq_power + 1;
+    if (irq[2]) irq_tune = irq_tune + 1;
   end
+
+  // a tuner user's frequency through the EV window
+  task tune(input integer u, input real hz, input en);
+    reg [47:0] inc;
+    begin
+      inc = hz / 122.88e6 * 281474976710656.0;
+      gp_write(EV + 4 * (64 + 2 * u), inc[31:0], 4'hf);
+      gp_write(EV + 4 * (65 + 2 * u), {en, 15'd0, inc[47:32]}, 4'hf);
+    end
+  endtask
 
   task check(input [8*40-1:0] what, input [31:0] got, input [31:0] want);
     begin
@@ -220,7 +236,7 @@ module tb_core_pfb;
     while (dut.rst) @(posedge clk_out);
     repeat (10) @(posedge clk_out);
 
-    r32(STS + 32'h00, d); check("signature", d, 32'h0E5D0010);
+    r32(STS + 32'h00, d); check("signature (32 tuner users)", d, 32'h0E5D2010);
     r32(STS + 32'h18, d); check("build id", d, 32'h20261029);
     r32(EV, d);           check("ev window reads 0", d, 0);
 
@@ -232,6 +248,14 @@ module tb_core_pfb;
     w32(32'hb0, 32'd2047);
     set_mask(1, 100, 2046, 4'd1);
     r32(CFG + 32'ha8, d); check("cfg 0xa8 readback", d, {16'd2, 16'd63});
+
+    // the tuner: user 0 1 kHz below the tone, user 1 where there is none;
+    // its ring (the stock RX registers) at TN_BASE, 256 bursts
+    tune(0, 2.999e6, 1);
+    tune(1, 5.0e6, 1);
+    w32(32'h8c, TN_BASE);
+    w16(32'h90, 16'd255);
+    w16(32'h00, 16'h0001);
 
     // the chain's latency (its history: 23 blocks of 2048 samples) and a
     // few frames
@@ -293,9 +317,28 @@ module tb_core_pfb;
       check("its bin is the tone", mag(rx_mem.mem[gen2_at + 1]) > 1000, 1);
     end
 
+    // the tuner: frames of 32 words at 12 kS/s since the start; its
+    // history holds the chain's uninitialised first frames for 120 more,
+    // so wait them out, then the newest frame
+    repeat (2048 * 150) @(posedge clk_out);
+    r32(STS + 32'h30, d); $display("     tuner frames %0d", d);
+    check("tuner frames > 20", d > 20, 1);
+    r32(STS + 32'h34, d); check("tuner drops", d, 0);
+    r32(STS + 32'h04, d);
+    $display("     tuner ring pointer %0d bursts", d[15:0]);
+    hdr = (d[15:0] * 16 / 32 - 1) * 32;
+    w = wf1_mem.mem[TN_BASE / 8 + hdr];
+    $display("     tuner user 0 %0d %0d, user 1 %0d %0d", $signed(w[31:0]), $signed(w[63:32]),
+             $signed(wf1_mem.mem[TN_BASE / 8 + hdr + 1][31:0]),
+             $signed(wf1_mem.mem[TN_BASE / 8 + hdr + 1][63:32]));
+    check("tuner words defined", ^{w, wf1_mem.mem[TN_BASE / 8 + hdr + 1]} !== 1'bx, 1);
+    check("tuner: the tone's user > 1000x the empty one",
+          mag(w) > 1000 * mag(wf1_mem.mem[TN_BASE / 8 + hdr + 1]) && mag(w) > 1000000, 1);
+    check("tuner interrupts", irq_tune > 0, 1);
+
     check("bins interrupts", irq_bins > 0, 1);
     check("power interrupts", irq_power > 0, 1);
-    r32(STS + 32'h20, d); check("no RX/WF running", d[12:10], 0);
+    r32(STS + 32'h20, d); check("RX (the tuner) running, no WF", d[12:10], 3'b001);
 
     if (errors == 0) $display("tb_core_pfb: PASSED");
     else             $display("tb_core_pfb: FAILED (%0d errors)", errors);

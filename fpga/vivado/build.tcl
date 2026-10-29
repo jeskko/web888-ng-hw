@@ -37,6 +37,7 @@ add_files [file join $root rtl gen sincos_qw.mem]
 if {$pfb} {
   add_files [glob [file join $root rtl fft *.v]]
   add_files [glob [file join $root rtl gen pfb_*.mem]]
+  add_files [file join $root rtl gen tune_fir.mem]
 }
 
 # RX channel count follows the vendor: 12 at 122.88 MHz (13 was unstable on

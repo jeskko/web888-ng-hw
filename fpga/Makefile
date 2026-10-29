@@ -19,10 +19,10 @@ PYTHON   ?= python3 -I
 JOBS     ?= 8
 
 RTL    := $(wildcard rtl/*.v) rtl/gen/rx_gain_rom.v
-TABLES := rtl/gen/sincos_qw.mem rtl/gen/rx_gain_rom.v
+TABLES := rtl/gen/sincos_qw.mem rtl/gen/rx_gain_rom.v rtl/gen/tune_fir.mem
 SIMLIB := sim/models/unisim_models.v sim/axi_mem_slave.v
 
-.PHONY: all tables sim sim-nco sim-core sim-core-pfb sim-fft sim-split sim-fir sim-chain pfb pfb-ooc hf vhf ci clean
+.PHONY: all tables sim sim-nco sim-core sim-core-pfb sim-tune sim-fft sim-split sim-fir sim-chain pfb pfb-ooc hf vhf ci clean
 
 all: sim
 
@@ -30,7 +30,7 @@ tables: $(TABLES)
 $(TABLES): scripts/gen_tables.py
 	$(PYTHON) scripts/gen_tables.py
 
-sim: sim-nco sim-core sim-core-pfb sim-fft sim-split sim-fir sim-chain sim-out sim-top
+sim: sim-nco sim-core sim-core-pfb sim-tune sim-fft sim-split sim-fir sim-chain sim-out sim-top
 
 sim/out:
 	mkdir -p $@
@@ -73,9 +73,16 @@ sim-top: | sim/out
 	cd sim && $(VVP) -n out/tb_top.vvp | tee out/tb_top.log
 	grep -q "tb_top: PASSED" sim/out/tb_top.log
 
+# the bins tuner alone, bit-exact against scripts/tune_model.py
+sim-tune: $(TABLES) | sim/out
+	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_tune.vvp sim/tb_tune.v rtl/fft/pfb_tune.v rtl/fft/sincos32.v
+	cd sim && $(VVP) -n out/tb_tune.vvp | tee out/tb_tune.log
+	grep -q "tb_tune: PASSED" sim/out/tb_tune.log
+	$(PYTHON) scripts/tune_model.py check sim/out/tune_in.txt sim/out/tune_out.txt
+
 sim-core-pfb: $(TABLES) | sim/out
 	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_core_pfb.vvp sim/tb_core_pfb.v $(SIMLIB) $(RTL) \
-	  $(PFB_RTL) rtl/fft/pfb_select.v rtl/fft/pfb_power.v rtl/fft/pfb_top.v
+	  $(PFB_RTL) rtl/fft/pfb_select.v rtl/fft/pfb_power.v rtl/fft/pfb_top.v rtl/fft/pfb_tune.v rtl/fft/sincos32.v
 	cd sim && $(VVP) -n out/tb_core_pfb.vvp | tee out/tb_core_pfb.log
 	grep -q "tb_core_pfb: PASSED" sim/out/tb_core_pfb.log
 
