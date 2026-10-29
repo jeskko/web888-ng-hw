@@ -155,7 +155,7 @@ module pfb_top #(
     .gen_req(gen_req), .gen(gen), .truncated(truncated),
     .s_data(bn_d), .s_valid(bn_v), .s_first(bn_f));
 
-  axi_ring_writer #(.FIFO_AW(9), .FRAME(NSEL + 1), .VARLEN(1)) bins_dma (
+  axi_ring_writer #(.FIFO_AW(9), .FRAME(NSEL + 1), .VARLEN(1), .FIFO_STYLE("block")) bins_dma (
     .clk(clk), .rst(rst), .enable(bins_enable), .base_addr(bins_addr), .len_m1(bins_len_m1),
     .oneshot(16'd0), .running(bn_run), .ptr(bins_ptr), .burst_done(bins_done),
     .overflow(bins_overflow), .frames(bins_frames), .drops(bins_drops), .bursts(),
@@ -208,7 +208,7 @@ module pfb_top #(
     .in_re(re), .in_im(im), .in_k(k), .in_valid(valid),
     .s_data(pw_d), .s_valid(pw_v), .s_first(pw_f));
 
-  axi_ring_writer #(.FIFO_AW(9), .FRAME(65), .VARLEN(1)) power_dma (
+  axi_ring_writer #(.FIFO_AW(9), .FRAME(65), .VARLEN(1), .FIFO_STYLE("block")) power_dma (
     .clk(clk), .rst(rst), .enable(power_enable), .base_addr(power_addr), .len_m1(power_len_m1),
     .oneshot(16'd0), .running(pw_run), .ptr(power_ptr), .burst_done(power_done),
     .overflow(power_overflow), .frames(power_frames_out), .drops(power_drops), .bursts(),

@@ -29,18 +29,31 @@ module delay_line #(
         end
       assign out = sr[D-1];
     end else begin : g_ram
+      // 512 words and more pinned to block RAM (synthesis otherwise moves
+      // them to LUT RAM when other block RAM users come)
       localparam integer A = $clog2(D - 1);
-      reg [W-1:0] mem [0:D-2];
       reg [W-1:0] q = {W{1'b0}};
       reg [A-1:0] ptr = {A{1'b0}};
       integer i;
-      initial for (i = 0; i < D - 1; i = i + 1) mem[i] = {W{1'b0}};
+      if (D >= 512) begin : g_block
+        (* ram_style = "block" *) reg [W-1:0] mem [0:D-2];
+        initial for (i = 0; i < D - 1; i = i + 1) mem[i] = {W{1'b0}};
+        always @(posedge clk)
+          if (ce) begin
+            q        <= mem[ptr];   // read first: written D - 1 cycles ago
+            mem[ptr] <= in;
+          end
+      end else begin : g_auto
+        reg [W-1:0] mem [0:D-2];
+        initial for (i = 0; i < D - 1; i = i + 1) mem[i] = {W{1'b0}};
+        always @(posedge clk)
+          if (ce) begin
+            q        <= mem[ptr];
+            mem[ptr] <= in;
+          end
+      end
       always @(posedge clk)
-        if (ce) begin
-          q        <= mem[ptr];   // read first: written D - 1 cycles ago
-          mem[ptr] <= in;
-          ptr      <= (ptr == D - 2) ? {A{1'b0}} : ptr + 1'b1;
-        end
+        if (ce) ptr <= (ptr == D - 2) ? {A{1'b0}} : ptr + 1'b1;
       assign out = q;
     end
   endgenerate

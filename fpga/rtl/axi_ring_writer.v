@@ -33,7 +33,8 @@ module axi_ring_writer #(
   parameter integer FRAME   = 1,     // words per frame (<= 2^FIFO_AW)
   parameter integer MAX_OUT = 8,
   parameter integer ID_W    = 6,
-  parameter integer VARLEN  = 0
+  parameter integer VARLEN  = 0,
+  parameter         FIFO_STYLE = "auto"   // sync_fifo STYLE
 ) (
   input  wire            clk,
   input  wire            rst,
@@ -157,7 +158,7 @@ module axi_ring_writer #(
   wire          admit    = fstart ? room : fkeep;
   wire          flast    = (fword == FRAME - 1);
 
-  sync_fifo #(.W(64), .AW(FIFO_AW)) fifo (
+  sync_fifo #(.W(64), .AW(FIFO_AW), .STYLE(FIFO_STYLE)) fifo (
     .clk(clk), .rst(rst || fifo_rst),
     .wdata(s_data), .wvalid(in_word && admit), .full(fifo_full),
     .rdata(fifo_rdata), .rvalid(fifo_rvalid), .rready(w_fire),

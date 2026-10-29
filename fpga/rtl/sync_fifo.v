@@ -8,7 +8,8 @@
 
 module sync_fifo #(
   parameter integer W  = 64,
-  parameter integer AW = 9
+  parameter integer AW = 9,
+  parameter         STYLE = "auto"    // "block": pinned to block RAM
 ) (
   input  wire          clk,
   input  wire          rst,
@@ -24,7 +25,6 @@ module sync_fifo #(
   output wire [AW:0]   count
 );
 
-  reg [W-1:0] mem [0:(1<<AW)-1];
   reg [AW:0]  wptr, rptr;
 
   wire [AW:0] used  = wptr - rptr;
@@ -34,12 +34,25 @@ module sync_fifo #(
   assign full  = used[AW];
   assign count = used + {{AW{1'b0}}, rvalid};
 
-  always @(posedge clk) begin
-    if (wvalid && !full)
-      mem[wptr[AW-1:0]] <= wdata;
-    if (pop)
-      rdata <= mem[rptr[AW-1:0]];
-  end
+  generate
+    if (STYLE == "block") begin : g_block
+      (* ram_style = "block" *) reg [W-1:0] mem [0:(1<<AW)-1];
+      always @(posedge clk) begin
+        if (wvalid && !full)
+          mem[wptr[AW-1:0]] <= wdata;
+        if (pop)
+          rdata <= mem[rptr[AW-1:0]];
+      end
+    end else begin : g_auto
+      reg [W-1:0] mem [0:(1<<AW)-1];
+      always @(posedge clk) begin
+        if (wvalid && !full)
+          mem[wptr[AW-1:0]] <= wdata;
+        if (pop)
+          rdata <= mem[rptr[AW-1:0]];
+      end
+    end
+  endgenerate
 
   always @(posedge clk) begin
     if (rst) begin
