@@ -8,6 +8,9 @@
 #
 # Options:
 #   --mac XX:XX:XX:XX:XX:XX  board MAC (EEPROM @0x10 and the emulated NIC)
+#   --eeprom-mac XX:...      EEPROM @0x10 only (ff:ff:ff:ff:ff:ff = blank):
+#                            the NIC keeps --mac, standing in for what the
+#                            FSBL leaves in the GEM's address registers
 #   --dna 0xHEX              FPGA device DNA reported in STS 0x0C (57 bit)
 #   --stock-sig              report the stock HF signature 0xAA55020C
 #   --sig 0xHEX              any signature (low nibble = RX channels)
@@ -57,6 +60,7 @@ EXTRA=()
 while [ $# -gt 0 ]; do
     case "$1" in
     --mac) MAC=$2; shift 2 ;;
+    --eeprom-mac) EEPROM_MAC=$2; shift 2 ;;
     --dna) DNA=$2; shift 2 ;;
     --stock-sig) SIG=0xAA55020C; shift ;;
     --sig) SIG=$2; shift 2 ;;
@@ -102,7 +106,7 @@ if [ "$LOG" = 1 ]; then
     PL+=(-global web888-pl.log=on -global web888-si5351.log=on)
 fi
 
-exec "$QEMU" -M "web888,mac=$MAC" -m 512M -smp "$SMP" \
+exec "$QEMU" -M "web888,mac=${EEPROM_MAC:-$MAC}" -m 512M -smp "$SMP" \
     -display none -serial mon:stdio \
     "${BOOT[@]}" \
     -dtb "$DTB" \

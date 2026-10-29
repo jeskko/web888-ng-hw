@@ -84,6 +84,35 @@ What a bitstream loaded on this firmware finds (read from the PS side:
     192.0.2.1) and the board data `serial`, `hw_rev` (`Web-888.1`),
     `prod_date`, `refclock` (24576000), `ethaddr`, `eth6addr`. Neither
     of its MACs is the one eth0 uses.
+- How the stock firmware uses it (2026-10-29: the FSBL disassembled, the
+  DT and init scripts read, the stock firmware run in `emu/` with a blank
+  MAC):
+  - **eth0's MAC**: the DT gives the GEM an nvmem cell, EEPROM 0x10 (6
+    bytes, `fixed-layout`, `mac-address`). The kernel's macb takes it if
+    it is a valid unicast address; otherwise the GEM's address registers;
+    otherwise a **random MAC at every boot**. Nothing else sets it: no
+    init script, no `mactab`, and the Alpine initramfs only reads it.
+  - **The FSBL's hook** ("User RedPitaya Bootloader start", run before
+    the hand-off): reads EEPROM 0x1800 (1 KB) over I2C at 100 kHz, puts
+    bytes 0x10-0x15 *of that buffer* (text inside `bootcmd=run
+    distro_bootcmd`, not a MAC) into the GEM's address registers with
+    `XEmacPs_SetMacAddress`, takes `refclock=` from the raw buffer
+    without checking the CRC, then programs the Si5351 (0x60). If the
+    EEPROM or the Si5351 doesn't answer, the hook fails and the FSBL's
+    fallback for SD boot is a loop forever: **the board hangs in the FSBL
+    until power-cycled**. Blank contents read fine.
+  - **Blank 0x10** (emulator, stock kernel and server): eth0 got a random
+    MAC; the EEPROM was unchanged after the server had run several
+    minutes (it doesn't repair it). The stock driver's genuine check wants
+    eth0's MAC to match the DNA, so such a unit's server gets zeros
+    (`emu/README.md`). On the board, the GEM registers the FSBL wrote would
+    come before the random MAC: with the factory environment those bytes
+    are `64:69:73:74:72:6f` ("distro"), a valid unicast address
+    *(inference, not seen)*.
+  - **A bad environment CRC**: `fw_printenv` warns and prints its built-in
+    defaults (which start like the unit's environment, so the factory
+    likely wrote the board data with `fw_setenv`); the server then has no
+    `refclock` and uses 24.576 MHz.
 - The boot ROM can't fall back on SD: "The SD card boot mode does not
   support header search or multiboot" (UG585), so it always loads
   `BOOT.BIN`.
