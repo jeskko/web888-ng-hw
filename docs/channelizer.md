@@ -511,6 +511,20 @@ the room for the longest one.
      51.5 of 60, LUT 12 846 (73 %), DSP 56 of 80.
 4. **Driver and backend**: registers for bin masks and the power line,
    the server backend, the iq-backend variant.
+   * The bitstream: `web888_core` with `PFB = 1` (`make pfb`,
+     `websdr_pfb.bit`, signature 0x0E5D0010; register map in
+     `fpga/doc/register-map.md`), `tb_core_pfb` through the registers. CI
+     (b86b1fe): **timing met in context, WNS +0.058 ns**, LUT 78 %, BRAM
+     51.5 of 60 ✓ (2026-10-29).
+   * The driver's `ZSDR_PFB_*` ioctls (`driver/`), `BinRadio` for web888d's
+     zynqsdr backend (web888-ng `crates/zynqsdr/src/pfb.rs`) ✓.
+   * **On the production unit** (2026-10-29, web888-ng-os, `zsdr-test`):
+     no bus fault; 59 998 frames/s; the power line's strongest bin 43.9 dB
+     over its weakest and 44.0 dB in the bins stream; masks, gens,
+     truncation; 64 bins for 2 s without a gap or drop, 31 % CPU to read
+     them ✓. (A first run had the board on its external clock input, by
+     the test's own `CLK_SET 0`: 187.85 MHz, and it ran fault-free that
+     far above the timing target too.)
 5. **On the test unit**: noise floor, spurs, alias rejection on the air
    against the stock bitstream; CPU per user.
 
