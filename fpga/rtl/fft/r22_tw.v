@@ -11,7 +11,7 @@
 //
 // The stage's own table: W_L^e for e < 3L/4 (`TW_FILE`, {re, im} TB bits
 // each; rtl/gen/pfb_tw_<pair>.mem from web888-dsp examples/pfbvectors.rs).
-// Five cycles of latency.
+// Six cycles of latency.
 
 module r22_tw #(
   parameter integer W    = 25,
@@ -36,13 +36,24 @@ module r22_tw #(
   reg [2*TB-1:0] tw [0:NT-1];
   initial $readmemh(TW_FILE, tw);
 
-  // the exponent from the position in the block
+  // stage 0: the exponent from the position in the block (registered: the
+  // 3r sum into the table's address was the channelizer's critical path)
   wire [LQ-1:0] r = in_idx[LQ-1:0];
   wire [1:0]    p = in_idx[LQ+1:LQ];
   wire [LQ+1:0] e = (p == 2'd0) ? {(LQ+2){1'b0}} :
                     (p == 2'd1) ? {1'b0, r, 1'b0} :
                     (p == 2'd2) ? {2'b00, r} :
                                   ({2'b00, r} + {1'b0, r, 1'b0});
+  reg [LQ+1:0]        e0 = 0;
+  reg signed [W-1:0]  a0_re = 0, a0_im = 0;
+  reg [LOGN-1:0]      idx0 = 0;
+  always @(posedge clk)
+    if (ce) begin
+      e0    <= e;
+      a0_re <= in_re;
+      a0_im <= in_im;
+      idx0  <= in_idx;
+    end
 
   // stage 1: the sample and its twiddle
   reg signed [W-1:0]  a_re = 0, a_im = 0;
@@ -51,12 +62,12 @@ module r22_tw #(
   reg [LOGN-1:0]      idx1 = 0;
   always @(posedge clk)
     if (ce) begin
-      a_re <= in_re;
-      a_im <= in_im;
-      w_re <= tw[e][2*TB-1:TB];
-      w_im <= tw[e][TB-1:0];
-      pass <= (e == {(LQ+2){1'b0}});
-      idx1 <= in_idx;
+      a_re <= a0_re;
+      a_im <= a0_im;
+      w_re <= tw[e0][2*TB-1:TB];
+      w_im <= tw[e0][TB-1:0];
+      pass <= (e0 == {(LQ+2){1'b0}});
+      idx1 <= idx0;
     end
 
   // stages 2-5, one carry chain each (122.88 MHz): the four products

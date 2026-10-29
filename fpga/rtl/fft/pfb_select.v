@@ -63,24 +63,39 @@ module pfb_select #(
       else      m1[mask_addr] <= mask_data;
     end
 
+  // ---- the bin and its mask bit in both banks, a clock later (the mask
+  // read, the bank's pick and the count in one clock failed timing)
+  reg signed [W-1:0] r_re = 0, r_im = 0;
+  reg [LOGN-1:0]     r_k = 0;
+  reg                r_valid = 1'b0, r_m0 = 1'b0, r_m1 = 1'b0;
+  always @(posedge clk)
+    if (ce) begin
+      r_re    <= in_re;
+      r_im    <= in_im;
+      r_k     <= in_k;
+      r_valid <= in_valid;
+      r_m0    <= m0[in_k[LOGN-1:5]][in_k[4:0]];
+      r_m1    <= m1[in_k[LOGN-1:5]][in_k[4:0]];
+    end
+
   // ---- per frame: switch banks at its start, count its bins
-  wire        start = ce && in_valid && (in_k == 0);
+  wire        start = ce && r_valid && (r_k == 0);
   wire        swap  = start && (gen_req != gen);
   wire        bnk   = swap ? ~bank : bank;   // the bank for this bin
-  wire [31:0] mword = bnk ? m1[in_k[LOGN-1:5]] : m0[in_k[LOGN-1:5]];
+  wire        mbit  = bnk ? r_m1 : r_m0;
   reg  [31:0] frame = 32'd0;
   reg  [$clog2(NSEL+1)-1:0] nsel = 0;
   reg         en_f = 1'b0;                   // enabled at this frame's start
   wire        en_now = start ? enable : en_f;
   wire [$clog2(NSEL+1)-1:0] n_now = start ? 0 : nsel;
-  wire        want  = en_now && in_valid && mword[in_k[4:0]] && (in_k != LAST);
+  wire        want  = en_now && r_valid && mbit && (r_k != LAST);
   wire        take  = want && (n_now < NSEL);
 
   // the bin, one clock later (the header takes the frame's first slot)
   reg         b_take = 1'b0;
   reg  [63:0] b_word = 64'd0;
-  wire signed [31:0] i32 = {{(32-W-SH){in_re[W-1]}}, in_re, {SH{1'b0}}};
-  wire signed [31:0] q32 = {{(32-W-SH){in_im[W-1]}}, in_im, {SH{1'b0}}};
+  wire signed [31:0] i32 = {{(32-W-SH){r_re[W-1]}}, r_re, {SH{1'b0}}};
+  wire signed [31:0] q32 = {{(32-W-SH){r_im[W-1]}}, r_im, {SH{1'b0}}};
 
   always @(posedge clk)
     if (ce) begin

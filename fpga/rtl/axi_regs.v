@@ -75,7 +75,11 @@ module axi_regs #(
   assign s_axi_bresp = 2'b00;
   assign s_axi_rresp = 2'b00;
 
+  // cfg_r starts at 0 from the configuration, not from `rst` (asserted
+  // once, after configuration): its reset fan-out failed timing
   reg [31:0] cfg_r [0:CFG_WORDS-1];
+  integer    ci;
+  initial for (ci = 0; ci < CFG_WORDS; ci = ci + 1) cfg_r[ci] = 32'd0;
   genvar g;
   generate
     for (g = 0; g < CFG_WORDS; g = g + 1) begin : cfg_out
@@ -107,7 +111,6 @@ module axi_regs #(
       s_axi_bvalid  <= 1'b0;
       w_busy        <= 1'b0;
       wp_valid      <= 1'b0;
-      for (i = 0; i < CFG_WORDS; i = i + 1) cfg_r[i] <= 32'd0;
     end else begin
       wp_valid <= 1'b0;
       if (wp_valid) begin
