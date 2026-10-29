@@ -73,6 +73,17 @@ What a bitstream loaded on this firmware finds (read from the PS side:
   (0x1800, 1 KB): board data (`serial`, `hw_rev`, `prod_date`,
   `refclock`, MACs) plus an unused `bootcmd`; nothing on the unit runs
   U-Boot.
+- The EEPROM is a 24C64 (8 KB, I2C 0x50, 2-byte addresses; `at24` in the
+  kernel). Read on the unit 2026-10-29, only two areas are used, the rest
+  is 0xff:
+  - **0x0010, 6 bytes**: the eth0 MAC the stock firmware uses (the
+    DNA-derived one, locally administered). What writes it isn't known.
+  - **0x1800-0x1bff**: a plain (single-copy) U-Boot environment, CRC32
+    over the 1020 bytes after it, 425 bytes used. It holds U-Boot's
+    generic defaults (`distro_bootcmd`, load addresses, `ipaddr`
+    192.0.2.1) and the board data `serial`, `hw_rev` (`Web-888.1`),
+    `prod_date`, `refclock` (24576000), `ethaddr`, `eth6addr`. Neither
+    of its MACs is the one eth0 uses.
 - The boot ROM can't fall back on SD: "The SD card boot mode does not
   support header search or multiboot" (UG585), so it always loads
   `BOOT.BIN`.
