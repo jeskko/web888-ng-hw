@@ -4,9 +4,10 @@ GPL-2.0-or-later. Replaces the closed `zynqsdr` driver that is built into
 the vendor kernel. Written only from `../docs/stock-driver.md` and
 `../fpga/doc/register-map.md` (no vendor code).
 
-Status: **runs on a Web-888** (2026-10-29: web888d through it with the
-open bitstream v0.2.0 on the production unit, under the web888-ng-os
-image; the channelizer part is untested on hardware). Compiles
+Status: **runs on a Web-888** (since 2026-10-29: web888d through it on
+the project's unit under the web888-ng-os image, first with the open HF
+bitstream v0.2.0, since that evening with the channelizer and its tuner;
+2026-10-30 from a tester's SD card). Compiles
 warning-free (`W=1`) against the 6.18 kernel of the Yocto image
 (web888-ng-os, linux-xlnx 6.18.10). In the QEMU virtual Web-888
 (`../emu/run.sh --kernel <6.18 zImage>`, vendor userspace) an unmodified

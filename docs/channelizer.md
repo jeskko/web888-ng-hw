@@ -1,10 +1,12 @@
 # Channelizer bitstream (design note)
 
-Status: **in progress** (2026-10-28): software model done, FFT
-architecture chosen (§3.6), the Verilog datapath (polyphase FIR, FFT,
-split) bit-exact to the model in simulation; synthesis for resources and
-timing under way (§5). This would be the core of the open-FPGA
-milestone (server design §11, M6).
+Status: **released** in web888-ng-hw v0.3.0 (`websdr_pfb.bit`,
+2026-10-30). The datapath, its outputs (bin selector, power line, ring
+DMAs) and the bins tuner (§3.8) are bit-exact to the model in
+simulation; timing is met with the guardband. It has run on the
+project's unit since 2026-10-29: web888d in bins mode, 32 tuner channels
+and FT8 skimmers on ten bands. Progress notes: §5. This is the core of
+the open-FPGA milestone (server design §11, M6).
 It drops compatibility with the stock server's FPGA interface. The
 stock bitstream stays usable as a fallback with its own backend.
 

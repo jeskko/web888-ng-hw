@@ -1,4 +1,4 @@
-# Virtual Web-888 (QEMU), work in progress
+# Virtual Web-888 (QEMU)
 
 QEMU 11.1.2 out-of-tree patch set: a `web888` machine (subclass of
 `xilinx-zynq-a9`) with `web888-pl`, a model of the FPGA logic
@@ -11,7 +11,7 @@ the model.
 Vendor binaries (kernel, initramfs, DTB, SD image) are extracted locally
 from the release zip and never committed.
 
-## Status (2026-10-28)
+## Status (2026-10-30)
 
 | milestone | state |
 |---|---|
@@ -21,6 +21,9 @@ from the release zip and never committed.
 | D. stock server streams, web UI on forwarded port 8073 | done (`tests/kiwi-check.py`: AM audio tone, waterfall carriers) |
 | E. web888d on the stock kernel and driver | done (2026-10-28, before its first run on a unit: RX at 48 kS/s, waterfalls, clean release of the device; found the musl `sched_setscheduler` stub) |
 | F. the open driver (`../driver/`) with the Yocto 6.18 kernel and the web888-ng-os image | done: web888d serves HPSDR through it, `driver/test/zsdr-test` passes |
+| G. web888-ng-os's SD card image through the boot ROM (`--bootrom --boot-mode sd`): SPL, U-Boot, A/B slots | done: `tests/sd-image.sh` (boot, ADC clock, web888.txt, slot marked good, fallback to slot B) |
+| H. updates of that image (RAUC) | done: `tests/ota.sh` (streamed install, power cut during an install, a bad update rolled back) |
+| I. chain-loading from the stock firmware (`../tools/chainboot`) | done: our image and the stock kernel both chain-load |
 
 ## Files
 
@@ -34,6 +37,9 @@ from the release zip and never committed.
 * `tests/vm.sh`: drive the serial console from scripts
 * `tests/kiwi-check.py`: Kiwi-protocol client; checks audio and waterfall
   end to end (needs python3 `websocket-client` and `numpy`)
+* `tests/sd-image.sh`, `tests/ota.sh`: web888-ng-os's SD card image and its
+  updates, booted as on a board (each script's header says what it checks)
+* `scripts/emu-dtb.sh`: the emulator's DT changes applied to a built DTB
 * `scripts/bootbin.py`: boot.bin partition extraction
 
 ## Quick start
