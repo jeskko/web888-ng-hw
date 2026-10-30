@@ -73,13 +73,15 @@ jobs:
           path: out/
           if-no-files-found: error
       - name: channelizer bitstream
-        # web888_core PFB = 1 (docs/channelizer.md); reported, not gating,
-        # and not released yet
-        continue-on-error: true
+        # web888_core PFB = 1 (docs/channelizer.md); reported on main, and
+        # on tags released, so then it must build and meet timing
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: |
           make -C fpga pfb VIVADO="$VIVADO" JOBS=8
           wns=$(sed -n 's/^WNS: \([-0-9.]*\) ns.*/\1/p' fpga/build/pfb.log | tail -n 1)
           echo "channelizer: WNS $wns ns" | tee -a "$GITHUB_STEP_SUMMARY"
+          awk -v w="$wns" 'BEGIN { exit !(w != "" && w + 0 >= 0) }' ||
+            { echo "::error::channelizer: timing not met (WNS '$wns')"; exit 1; }
           mkdir pfb && echo "WNS $wns ns" > pfb/wns.txt
           cp fpga/build/pfb/websdr_pfb.bit pfb/
           cp fpga/build/pfb/timing.txt pfb/timing_pfb.txt
@@ -87,7 +89,7 @@ jobs:
           cp fpga/build/pfb/utilization.txt pfb/utilization_pfb.txt
           cd pfb && sha256sum websdr_pfb.bit > SHA256SUMS
       - uses: actions/upload-artifact@v4
-        continue-on-error: true
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         with:
           name: channelizer
           path: pfb/
@@ -116,9 +118,19 @@ jobs:
         with:
           name: bitstreams
           path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: channelizer
+          path: pfb
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cp pfb/websdr_pfb.bit out/
+          cp pfb/timing_pfb.txt pfb/utilization_pfb.txt out/
+          cat pfb/SHA256SUMS >> out/SHA256SUMS
+          sed 's/^/channelizer: /' pfb/wns.txt >> out/wns.txt
+          # release assets are files: the PS7 init (U-Boot SPL) as one
+          tar -C out -czf out/ps7_init.tar.gz ps7_init && rm -rf out/ps7_init
           pre=
           case "$GITHUB_REF_NAME" in v0.*) pre=--prerelease ;; esac
           {
@@ -126,6 +138,8 @@ jobs:
             echo
             echo "* \`websdr_hf.bit\`: HF, 12 RX + 2 WF (signature \`0x0E5D020C\`)"
             echo "* \`websdr_vhf.bit\`: VHF, 13 RX + 2 WF (signature \`0x0E5D020D\`)"
+            echo "* \`websdr_pfb.bit\`: the channelizer, HF in 30 kHz bins + a tuner for 32 users (signature \`0x0E5D0010\`; its own register map, \`docs/channelizer.md\`)"
+            echo "* \`ps7_init.tar.gz\`: the PS7 initialisation (DDR, MIO, clocks) for a first-stage loader"
             echo "* \`SHA256SUMS\`, timing and utilization reports"
             echo
             sed 's/^/Timing (with guardband): /' out/wns.txt
