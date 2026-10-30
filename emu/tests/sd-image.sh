@@ -9,8 +9,9 @@
 # On a writable copy of the image (the guest writes to it as to a card):
 #   1. first boot with a web888.txt (hostname, admin password, SSH key):
 #      the ADC clock set up by U-Boot, slot A, web888-setup and web888d
-#      running, the slot marked good; after power-off the password line
-#      reads "(set)" and web888-setup.log is on the FAT
+#      running, the slot marked good, the tunnel clients there but none
+#      running (web888.txt sets none up); after power-off the password
+#      line reads "(set)" and web888-setup.log is on the FAT
 #   2. static network from web888.txt; the log is rewritten only because
 #      it changed
 #   3. slot A without a kernel: U-Boot uses up its tries, slot B boots
@@ -22,7 +23,7 @@
 # PL is the standard one whatever is loaded, so bins mode isn't tested.
 set -euo pipefail
 EMU=$(cd "$(dirname "$0")/.." && pwd)
-[ $# -ge 1 ] || { sed -n '4,17p' "$0" >&2; exit 2; }
+[ $# -ge 1 ] || { sed -n '4,18p' "$0" >&2; exit 2; }
 IMAGE=$1
 W=${2:-$EMU/build/sd-image-test}
 SSH_PORT=22322 WEB_PORT=28173
@@ -139,6 +140,8 @@ else
 	check "web888d's own bitstream choice" on '! tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q websdr_pfb'
 fi
 check "admin hash in /config" on 'grep -q admin_hash /config/web888d.toml'
+check "tunnel clients installed" on 'test -x /usr/bin/frpc -a -x /usr/bin/cloudflared -a -x /usr/bin/rathole -a -x /usr/bin/chisel'
+check "no tunnel without its settings" on '! systemctl is-active frpc cloudflared rathole chisel && ! ls /run/web888 | grep -Eq "frpc|cloudflared|rathole|chisel"'
 check "/boot read-only again" on 'grep -q " /boot vfat ro," /proc/mounts'
 check "web UI answers" curl -sk --max-time 20 "https://127.0.0.1:$WEB_PORT/"
 on 'sleep 75; systemctl status web888-boot-ok --no-pager' > "$W/boot-ok.txt" 2>&1 || true
