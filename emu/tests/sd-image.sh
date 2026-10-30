@@ -17,6 +17,9 @@
 #
 # Each root slot gets the emulator's DT changes (scripts/emu-dtb.sh). The
 # checks log in over SSH with a key made here. Ports: SSH 22322, web 28173.
+# CHANNELIZER=1: the channelizer image (its web888.txt sets bitstream =
+# channelizer, kept in boot 1; web888d gets websdr_pfb.bit). The emulated
+# PL is the standard one whatever is loaded, so bins mode isn't tested.
 set -euo pipefail
 EMU=$(cd "$(dirname "$0")/.." && pwd)
 [ $# -ge 1 ] || { sed -n '4,17p' "$0" >&2; exit 2; }
@@ -104,8 +107,14 @@ txt() { # web888.txt from lines
 fat() { mcopy -i "$FAT" "::$1" - 2> /dev/null | tr -d '\r'; }
 
 echo "== 1. first boot"
+bitline=
+if [ "${CHANNELIZER:-0}" = 1 ]; then
+	check "the image's web888.txt chooses the channelizer" \
+		grep -q '^bitstream = channelizer$' < <(fat web888.txt)
+	bitline="bitstream = channelizer"
+fi
 txt "hostname = emu888" "admin_password = test-password-1" \
-	"ssh_key = $(cat "$W/key.pub")"
+	"ssh_key = $(cat "$W/key.pub")" ${bitline:+"$bitline"}
 boot 'login:' 900 || bad "no login prompt"
 log=$("$VM" log)
 check "U-Boot set the ADC clock" grep -q 'web888: ADC clock 122.88 MHz' <<< "$log"
@@ -124,6 +133,11 @@ check "eth0 (not renamed)" on 'test -e /sys/class/net/eth0'
 check "web888-setup ran" on 'systemctl is-active web888-setup'
 check "hostname from web888.txt" on 'test "$(hostname)" = emu888'
 check "web888d running" on 'systemctl is-active web888d'
+if [ "${CHANNELIZER:-0}" = 1 ]; then
+	check "web888d loads the channelizer" on 'tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q "bitstream /usr/share/web888/websdr_pfb.bit"'
+else
+	check "web888d's own bitstream choice" on '! tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q websdr_pfb'
+fi
 check "admin hash in /config" on 'grep -q admin_hash /config/web888d.toml'
 check "/boot read-only again" on 'grep -q " /boot vfat ro," /proc/mounts'
 check "web UI answers" curl -sk --max-time 20 "https://127.0.0.1:$WEB_PORT/"
