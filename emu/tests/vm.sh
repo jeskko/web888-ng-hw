@@ -8,6 +8,8 @@
 #   tests/vm.sh run 'command' [secs]     run, print output, exit with its status
 #   tests/vm.sh log                      console log so far
 #   tests/vm.sh stop
+# The SD image is used as a snapshot (changes are dropped) unless
+# VM_SNAPSHOT=0: then the guest writes to it, as to a real card.
 set -euo pipefail
 EMU=$(cd "$(dirname "$0")/.." && pwd)
 D=${VM_DIR:-$EMU/build/vm}
@@ -22,7 +24,9 @@ start)
     rm -f "$D/in" "$D/console.log"
     mkfifo "$D/in"
     # keep the fifo open for writing so qemu never sees EOF
-    (exec 3<>"$D/in"; exec "$EMU/run.sh" --snapshot "$@" <&3 \
+    snap=--snapshot
+    [ "${VM_SNAPSHOT:-1}" = 0 ] && snap=
+    (exec 3<>"$D/in"; exec "$EMU/run.sh" $snap "$@" <&3 \
         >"$D/console.log" 2>&1) &
     echo $! > "$D/pid"
     ;;
