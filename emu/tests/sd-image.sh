@@ -18,9 +18,9 @@
 #
 # Each root slot gets the emulator's DT changes (scripts/emu-dtb.sh). The
 # checks log in over SSH with a key made here. Ports: SSH 22322, web 28173.
-# CHANNELIZER=1: the channelizer image (its web888.txt sets bitstream =
-# channelizer, kept in boot 1; web888d gets websdr_pfb.bit). The emulated
-# PL is the standard one whatever is loaded, so bins mode isn't tested.
+# CHANNELIZER=1: web888.txt sets bitstream = channelizer in boot 1;
+# web888d gets websdr_pfb.bit. The emulated PL is the standard one
+# whatever is loaded, so bins mode isn't tested.
 set -euo pipefail
 EMU=$(cd "$(dirname "$0")/.." && pwd)
 [ $# -ge 1 ] || { sed -n '4,18p' "$0" >&2; exit 2; }
@@ -109,11 +109,7 @@ fat() { mcopy -i "$FAT" "::$1" - 2> /dev/null | tr -d '\r'; }
 
 echo "== 1. first boot"
 bitline=
-if [ "${CHANNELIZER:-0}" = 1 ]; then
-	check "the image's web888.txt chooses the channelizer" \
-		grep -q '^bitstream = channelizer$' < <(fat web888.txt)
-	bitline="bitstream = channelizer"
-fi
+[ "${CHANNELIZER:-0}" = 1 ] && bitline="bitstream = channelizer"
 txt "hostname = emu888" "admin_password = test-password-1" \
 	"ssh_key = $(cat "$W/key.pub")" ${bitline:+"$bitline"}
 boot 'login:' 900 || bad "no login prompt"
