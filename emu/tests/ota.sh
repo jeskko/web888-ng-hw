@@ -105,7 +105,17 @@ emu_dt() {
 	on "mkdir -p /run/ota-test && mount /dev/mmcblk0p$1 /run/ota-test &&
 		cat > /run/ota-test/boot/zynq-web888.dtb && umount /run/ota-test" < "$W/emu.dtb"
 }
-env_of() { on "fw_printenv -n $1" 2> /dev/null; }
+# right after an install RAUC may still hold the environment: retry
+env_of() {
+	local v
+	for _ in 1 2 3 4 5; do
+		v=$(on "fw_printenv -n $1" 2> /dev/null) && [ -n "$v" ] && {
+			echo "$v"
+			return
+		}
+		sleep 1
+	done
+}
 # the console log goes on over reboots in the guest: mark it, then wait
 # for (or read) what came after the mark
 mark() { mark=$("$VM" log | wc -l); }
