@@ -10,7 +10,7 @@
 module delay_line #(
   parameter integer W = 50,
   parameter integer D = 1024,
-  parameter integer BLOCK_MIN = 250
+  parameter integer BLOCK_MIN = 500
 ) (
   input  wire         clk,
   input  wire         ce,

@@ -40,7 +40,10 @@ module pfb_split #(
   output reg  signed [W-1:0]  out_im = 0,
   output reg  [LOGN-1:0]      out_k = 0,
   output reg  [15:0]          out_frame = 0,
-  output reg                  out_valid = 1'b0
+  output reg                  out_valid = 1'b0,
+  // the twiddle ROM's other port (the zoom engine's: W_2N^a, a < N/2)
+  input  wire [LOGN-2:0]      tw2_addr,
+  output reg  [2*TB-1:0]      tw2_q = 0
 );
 
   localparam integer N = 1 << LOGN;
@@ -60,6 +63,7 @@ module pfb_split #(
   // twiddles: a quarter wave, W_2N^k for k < N/2 (k >= N/2 is (im, -re) of k - N/2)
   (* rom_style = "block" *) reg [2*TB-1:0] tw [0:N/2-1];
   initial $readmemh(TW_FILE, tw, 0, N/2-1);
+  always @(posedge clk) tw2_q <= tw[tw2_addr];
 
   reg        wsel = 1'b0;
   reg  [1:0] odd_of = 2'b00, valid_of = 2'b00;

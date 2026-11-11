@@ -147,7 +147,7 @@ CFG:
 
 | off | width | field |
 |---|---|---|
-| 0xA0 | u16 | control: bit 0 bins on, bit 1 power line on, [7:4] gen request (the next frame uses the mask written since, and carries this gen) |
+| 0xA0 | u16 | control: bit 0 bins on, bit 1 power line on, bit 2 zoom engine on, [7:4] gen request (the next frame uses the mask written since, and carries this gen) |
 | 0xA4 | u32 | bins ring physical address (128-byte aligned) |
 | 0xA8 | u16 | bins ring length − 1, in 128-byte bursts |
 | 0xAA | u16 | frames per power line (summed |X|², e.g. 20: 3000 lines a second) |
@@ -182,6 +182,27 @@ or dropped whole):
 
 Interrupts: IRQ_F2P[0] a bins burst written, [1] a power burst written,
 [2] a tuner burst written, [3] PPS edge.
+
+### The zoom engine
+
+Power spectra of runs of bins, for zoomed waterfalls (`docs/channelizer.md`
+§3.9). The power ring must run; results come on it between the power
+line's chunks.
+
+* CFG 0xA0 bit 2: on (off: the queue and the jobs in flight dropped).
+* a job: EV window word 128, `{tag[5:0], shift[2:0], logn[3:0], B − 1
+  [7:0], k0[10:0]}`: bins k0 .. k0 + B − 1, FFT length n = 2^logn (logn
+  3..11), B · n ≤ 4096, k0 + B ≤ 2048. 16 jobs queue.
+* STS 0x58: `[31:28]` 1 (0: no engine in this bitstream), 25 a job out
+  of range was dropped, 24 the queue overflowed (both until off),
+  `[20:16]` queue places free, `[15:0]` jobs done.
+* a result: chunks, each a header `{0x5042, 3, chunk[3:0], 2'd0,
+  tag[5:0], number}`, number = `{saturated, 11'd0, chunks − 1 [3:0],
+  frame[15:0]}` (the first frame captured), and up to 64 words `{f32[2i +
+  1], f32[2i]}`: B · n / 2 points in all, bins lowest first, of each the
+  FFT points −n/4 .. n/4 − 1 (the middle 30 kHz, ascending): the power
+  of the Blackman-Harris-windowed FFT (the window's peak 1), in units of
+  the 25-bit bins squared (the bins ring's samples are those << 5).
 
 ### The bins tuner (`TUNE` users, 32)
 

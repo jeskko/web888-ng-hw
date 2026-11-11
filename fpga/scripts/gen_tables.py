@@ -103,6 +103,18 @@ def tune_taps():
     return q, atten
 
 
+def gen_zoom_win():
+    """The zoom engine's window (pfb_zoom.v): 4-term Blackman-Harris,
+    periodic over 2048, entries 0..1023 (symmetric; the peak, entry 1024,
+    is the constant 2^17 - 1), 17-bit unsigned."""
+    a = (0.35875, 0.48829, 0.14128, 0.01168)
+    with open(os.path.join(OUT, "zoom_win.mem"), "w") as f:
+        for k in range(1024):
+            x = 2 * math.pi * k / 2048
+            w = a[0] - a[1] * math.cos(x) + a[2] * math.cos(2 * x) - a[3] * math.cos(3 * x)
+            f.write(f"{round(w * 131071):05x}\n")
+
+
 def gen_tune_fir():
     q, atten = tune_taps()
     with open(os.path.join(OUT, "tune_fir.mem"), "w") as f:
@@ -115,4 +127,5 @@ if __name__ == "__main__":
     gen_sincos()
     gen_rx_gain()
     gen_tune_fir()
+    gen_zoom_win()
     print("tables written to", os.path.normpath(OUT), file=sys.stderr)

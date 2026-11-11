@@ -31,7 +31,7 @@ module tb_chain;
               .TW_PREFIX("../rtl/gen/pfb_tw_"), .SPLIT_FILE("../rtl/gen/pfb_split_tw.mem")) dut (
     .clk(clk), .ce(run), .adc(adc),
     .out_re(out_re), .out_im(out_im), .out_k(out_k),
-    .out_valid(out_valid), .out_frame(out_frame));
+    .out_valid(out_valid), .out_frame(out_frame), .tw2_addr(10'd0), .tw2_q());
 
   integer t = 0;
   always @(posedge clk) begin

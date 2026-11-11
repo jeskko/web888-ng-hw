@@ -61,7 +61,7 @@ module tb_out;
   pfb_power #(.W(W), .LOGN(LOGN)) pow (
     .clk(clk), .ce(1'b1), .enable(1'b1), .frames(16'd2),
     .in_re(re), .in_im(im), .in_k(k), .in_valid(valid),
-    .s_data(pow_d), .s_valid(pow_v_o), .s_first(pow_f));
+    .s_data(pow_d), .s_valid(pow_v_o), .s_first(pow_f), .quiet());
 
   task write_mask(input [N-1:0] m);
     integer w;

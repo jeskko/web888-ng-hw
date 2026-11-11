@@ -31,7 +31,10 @@ module pfb_power #(
 
   output reg  [63:0]         s_data = 64'd0,
   output reg                 s_valid = 1'b0,
-  output reg                 s_first = 1'b0
+  output reg                 s_first = 1'b0,
+  // no word will come out in the next QUIET clocks (for a stream sharing
+  // the ring writer: the zoom engine's chunks)
+  output reg                 quiet = 1'b0
 );
 
   localparam integer N = 1 << LOGN;
@@ -66,6 +69,21 @@ module pfb_power #(
       fcnt    <= begin_now ? 16'd0 : fcnt + 1'b1;
       first_f <= first_now;
       last_f  <= last_now;
+    end
+
+  // ---- quiet: a line's words come out during its last frame and (the
+  // pipeline) a few clocks into the next. Not quiet then, nor in the last
+  // QUIET + 64 clocks of a frame before a last one.
+  localparam integer QUIET = 192;
+  wire        next_last = ends_r ? (on_r && one_r) : (on && next_last_r);
+  reg  [5:0]  tail = 6'd0;
+  always @(posedge clk)
+    if (ce) begin
+      if (start && on && last_f) tail <= 6'd40;
+      else if (tail != 6'd0)     tail <= tail - 1'b1;
+      quiet <= !(on && last_f) && !(start && on_now && last_now) && (tail == 6'd0) &&
+               !(start && on && last_f) &&
+               !(next_last && in_k >= N - QUIET - 64);
     end
 
   // ---- stage 1: inputs, the RAM read

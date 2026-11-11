@@ -38,7 +38,8 @@ module web888_core #(
   parameter         TUNE_COEF_FILE  = "tune_fir.mem",
   parameter         PFB_COEF_PREFIX = "pfb_coef_",
   parameter         PFB_TW_PREFIX   = "pfb_tw_",
-  parameter         PFB_SPLIT_FILE  = "pfb_split_tw.mem"
+  parameter         PFB_SPLIT_FILE  = "pfb_split_tw.mem",
+  parameter         ZOOM_WIN_FILE   = "zoom_win.mem"
 ) (
   // ADC (LTC2208, CMOS, offset binary)
   input  wire        adc_clk_p_i,
@@ -276,7 +277,7 @@ module web888_core #(
 
   // ---------------------------------------------------------------- registers
   localparam integer CFG_WORDS = PFB ? 45 : 40;
-  localparam integer STS_WORDS = PFB ? 22 : 16;
+  localparam integer STS_WORDS = PFB ? 23 : 16;
   wire [CFG_WORDS*32-1:0] cfg;
   wire [STS_WORDS*32-1:0] sts;
 
@@ -346,11 +347,15 @@ module web888_core #(
   wire        pfb_bins_ovf, pfb_bins_berr, pfb_power_ovf, pfb_power_berr;
   wire [3:0]  pfb_gen;
   wire [31:0] pfb_bins_frames, pfb_bins_drops, pfb_power_lines, pfb_power_drops;
+  wire [4:0]  zoom_free;
+  wire [15:0] zoom_done;
+  wire        zoom_ovf, zoom_bad;
 
   generate if (PFB == 0) begin : ddc
   assign {pfb_bins_ptr, pfb_power_ptr, pfb_bins_done, pfb_power_done, pfb_trunc,
           pfb_bins_ovf, pfb_bins_berr, pfb_power_ovf, pfb_power_berr, pfb_gen,
-          pfb_bins_frames, pfb_bins_drops, pfb_power_lines, pfb_power_drops} = 0;
+          pfb_bins_frames, pfb_bins_drops, pfb_power_lines, pfb_power_drops,
+          zoom_free, zoom_done, zoom_ovf, zoom_bad} = 0;
 
   // ---------------------------------------------------------------- RX
   wire        rx_wv;
@@ -524,6 +529,7 @@ module web888_core #(
   wire [15:0] pfb_ctrl     = cfg[40*32 +: 16];         // 0xa0
   wire        bins_en      = pfb_ctrl[0];
   wire        power_en     = pfb_ctrl[1];
+  wire        zoom_en      = pfb_ctrl[2];
   wire [3:0]  gen_req      = pfb_ctrl[7:4];
   wire [31:0] bins_addr    = cfg[41*32 +: 32];         // 0xa4
   wire [15:0] bins_len     = cfg[42*32 +: 16];         // 0xa8
@@ -533,12 +539,14 @@ module web888_core #(
 
   // the bin mask through the EV window: word w = bins 32w .. 32w + 31
   wire mask_we = ev_valid && ev_idx < 10'd64;
+  // zoom jobs: EV word 128
+  wire zoom_we = ev_valid && ev_idx == 10'd128;
   wire signed [24:0] ch_re, ch_im;
   wire [10:0]        ch_k;
   wire               ch_valid;
 
   pfb_top #(.COEF_PREFIX(PFB_COEF_PREFIX), .TW_PREFIX(PFB_TW_PREFIX),
-            .SPLIT_FILE(PFB_SPLIT_FILE)) pfb (
+            .SPLIT_FILE(PFB_SPLIT_FILE), .ZOOM_WIN_FILE(ZOOM_WIN_FILE)) pfb (
     .clk(clk), .rst(rst), .adc(adc),
     .bins_re(ch_re), .bins_im(ch_im), .bins_k(ch_k), .bins_valid(ch_valid),
     .bins_enable(bins_en), .mask_we(mask_we), .mask_addr(ev_idx[5:0]), .mask_data(ev_data),
@@ -550,6 +558,8 @@ module web888_core #(
     .power_len_m1(power_len), .power_ptr(pfb_power_ptr), .power_done(pfb_power_done),
     .power_overflow(pfb_power_ovf), .power_frames_out(pfb_power_lines),
     .power_drops(pfb_power_drops), .power_bresp_err(pfb_power_berr),
+    .zoom_enable(zoom_en), .zoom_job_we(zoom_we), .zoom_job(ev_data),
+    .zoom_free(zoom_free), .zoom_done(zoom_done), .zoom_ovf(zoom_ovf), .zoom_bad(zoom_bad),
     .m_axi_bn_awid(m_axi_rx_awid),
     .m_axi_bn_awaddr(m_axi_rx_awaddr),
     .m_axi_bn_awlen(m_axi_rx_awlen),
@@ -794,6 +804,9 @@ module web888_core #(
   assign sts[19*32 +: 32] = pfb_bins_drops;                         // 0x4c
   assign sts[20*32 +: 32] = pfb_power_lines;                        // 0x50
   assign sts[21*32 +: 32] = pfb_power_drops;                        // 0x54
+  // the zoom engine: [31:28] 1 = present, 25 a bad job, 24 queue overflow,
+  // [20:16] queue free, [15:0] jobs done
+  assign sts[22*32 +: 32] = {4'd1, 2'd0, zoom_bad, zoom_ovf, 3'd0, zoom_free, zoom_done};  // 0x58
   end endgenerate
 
   // ---------------------------------------------------------------- outputs

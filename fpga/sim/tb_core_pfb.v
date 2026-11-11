@@ -91,7 +91,8 @@ module tb_core_pfb;
                 .PFB(1), .TUNE_COEF_FILE("../rtl/gen/tune_fir.mem"),
                 .PFB_COEF_PREFIX("../rtl/gen/pfb_coef_"),
                 .PFB_TW_PREFIX("../rtl/gen/pfb_tw_"),
-                .PFB_SPLIT_FILE("../rtl/gen/pfb_split_tw.mem")) dut (
+                .PFB_SPLIT_FILE("../rtl/gen/pfb_split_tw.mem"),
+                .ZOOM_WIN_FILE("../rtl/gen/zoom_win.mem")) dut (
     .adc_clk_p_i(adc_clk), .adc_clk_n_i(~adc_clk), .adc_dat_a_i(adc_dat), .adc_ofl_i(1'b0),
     .adc_pga_o(adc_pga), .adc_dith_o(adc_dith), .pps_i(pps), .antenna_o(antenna), .led_o(led),
     .ps_resetn(ps_resetn), .clk_out(clk_out), .irq(irq), .emio_gpio(emio_gpio), .fclk(fclk),

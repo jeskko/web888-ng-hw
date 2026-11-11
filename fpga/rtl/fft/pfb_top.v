@@ -6,14 +6,17 @@
 // samples -> pfb_chain -> the bin selector and the power line, each into
 // a DDR ring through an AXI3 master (axi_ring_writer, frames marked by
 // their headers). Configuration and status are ports, for the register
-// file of the bitstream around it (and for synthesising it alone).
+// file of the bitstream around it (and for synthesising it alone). The
+// zoom engine (pfb_zoom, §3.9) puts its jobs' spectra on the power ring,
+// between the power line's chunks.
 
 module pfb_top #(
   parameter integer NSEL = 64,
   // ROM tables (rtl/gen; Vivado finds them by name among the sources)
   parameter         COEF_PREFIX = "pfb_coef_",
   parameter         TW_PREFIX   = "pfb_tw_",
-  parameter         SPLIT_FILE  = "pfb_split_tw.mem"
+  parameter         SPLIT_FILE  = "pfb_split_tw.mem",
+  parameter         ZOOM_WIN_FILE = "zoom_win.mem"
 ) (
   input  wire        clk,
   input  wire        rst,
@@ -53,6 +56,16 @@ module pfb_top #(
   output wire [31:0] power_frames_out,
   output wire [31:0] power_drops,
   output wire        power_bresp_err,
+
+  // the zoom engine: jobs in, status (its results go to the power ring,
+  // which must run)
+  input  wire        zoom_enable,
+  input  wire        zoom_job_we,
+  input  wire [31:0] zoom_job,
+  output wire [4:0]  zoom_free,
+  output wire [15:0] zoom_done,
+  output wire        zoom_ovf,
+  output wire        zoom_bad,
 
   output wire [5:0]   m_axi_bn_awid,
   output wire [31:0]  m_axi_bn_awaddr,
@@ -136,9 +149,12 @@ module pfb_top #(
   wire [10:0]        k;
   wire               valid;
   wire [15:0]        frame;
+  wire [9:0]         zm_tw_addr;
+  wire [35:0]        zm_tw_q;
   pfb_chain #(.COEF_PREFIX(COEF_PREFIX), .TW_PREFIX(TW_PREFIX), .SPLIT_FILE(SPLIT_FILE)) chain (
     .clk(clk), .ce(1'b1), .adc(adc),
-    .out_re(re), .out_im(im), .out_k(k), .out_valid(valid), .out_frame(frame));
+    .out_re(re), .out_im(im), .out_k(k), .out_valid(valid), .out_frame(frame),
+    .tw2_addr(zm_tw_addr), .tw2_q(zm_tw_q));
   assign bins_re = re;
   assign bins_im = im;
   assign bins_k = k;
@@ -202,17 +218,33 @@ module pfb_top #(
   // ---- the power line
   wire        pw_run;
   wire [63:0] pw_d;
-  wire        pw_v, pw_f;
+  wire        pw_v, pw_f, pw_quiet;
   pfb_power pow (
     .clk(clk), .ce(1'b1), .enable(pw_run), .frames(power_frames),
     .in_re(re), .in_im(im), .in_k(k), .in_valid(valid),
-    .s_data(pw_d), .s_valid(pw_v), .s_first(pw_f));
+    .s_data(pw_d), .s_valid(pw_v), .s_first(pw_f), .quiet(pw_quiet));
+
+  // ---- the zoom engine: its chunks start only while the power line is
+  // quiet for a chunk's length, so the two never meet
+  wire [63:0] zm_d;
+  wire        zm_v, zm_f;
+  pfb_zoom #(.WIN_FILE(ZOOM_WIN_FILE)) zoom (
+    .clk(clk), .rst(rst),
+    .in_re(re), .in_im(im), .in_k(k), .in_valid(valid), .in_frame(frame),
+    .enable(zoom_enable), .job_we(zoom_job_we), .job_data(zoom_job),
+    .q_free(zoom_free), .jobs_done(zoom_done), .q_ovf(zoom_ovf), .bad_job(zoom_bad),
+    .tw_addr(zm_tw_addr), .tw_q(zm_tw_q),
+    .out_ok(pw_quiet && pw_run),
+    .s_data(zm_d), .s_valid(zm_v), .s_first(zm_f));
+  wire [63:0] pz_d = zm_v ? zm_d : pw_d;
+  wire        pz_v = zm_v || pw_v;
+  wire        pz_f = zm_v ? zm_f : pw_f;
 
   axi_ring_writer #(.FIFO_AW(9), .FRAME(65), .VARLEN(1), .FIFO_STYLE("block")) power_dma (
     .clk(clk), .rst(rst), .enable(power_enable), .base_addr(power_addr), .len_m1(power_len_m1),
     .oneshot(16'd0), .running(pw_run), .ptr(power_ptr), .burst_done(power_done),
     .overflow(power_overflow), .frames(power_frames_out), .drops(power_drops), .bursts(),
-    .bresp_err(power_bresp_err), .s_data(pw_d), .s_valid(pw_v), .s_first(pw_f),
+    .bresp_err(power_bresp_err), .s_data(pz_d), .s_valid(pz_v), .s_first(pz_f),
     .m_axi_awid(m_axi_pw_awid),
     .m_axi_awaddr(m_axi_pw_awaddr),
     .m_axi_awlen(m_axi_pw_awlen),

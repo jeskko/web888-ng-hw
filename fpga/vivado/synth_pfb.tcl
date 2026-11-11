@@ -19,6 +19,7 @@ set_param general.maxThreads $jobs
 read_verilog [glob [file join $root rtl fft *.v]]
 read_verilog [file join $root rtl axi_ring_writer.v] [file join $root rtl sync_fifo.v]
 foreach m [glob [file join $root rtl gen pfb_*.mem]] { read_mem $m }
+read_mem [file join $root rtl gen zoom_win.mem]
 
 synth_design -top pfb_top -part xc7z010clg400-1 -mode out_of_context
 create_clock -period 8.000 -name clk [get_ports clk]

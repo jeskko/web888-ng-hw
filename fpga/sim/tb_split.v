@@ -33,7 +33,7 @@ module tb_split;
     .clk(clk), .ce(1'b1),
     .in_re(in_re), .in_im(in_im), .in_idx(in_idx), .in_odd(in_odd), .in_valid(1'b1),
     .out_re(out_re), .out_im(out_im), .out_k(out_k), .out_frame(out_frame),
-    .out_valid(out_valid));
+    .out_valid(out_valid), .tw2_addr(10'd0), .tw2_q());
 
   // the frames, then one more (zeros) that reads the last one out
   integer t = 0;

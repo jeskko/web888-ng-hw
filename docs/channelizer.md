@@ -518,9 +518,9 @@ last step (LUT 65 %, BRAM 54.5 of 60, 15 DSP free).
 
 ```mermaid
 flowchart TD
-  bins["the chain's bins<br/>one per clock, k = 0..2047"] --> cap["capture: n frames of B bins<br/>18-bit I/Q, bit-reversed order"]
+  bins["the chain's bins<br/>one per clock, k = 0..2047"] --> cap["capture: n frames of B bins<br/>22-bit I/Q, bit-reversed order"]
   jobs["job queue (EV window)<br/>k0, B, n, shift, tag"] --> cap
-  cap --> ram["work RAM<br/>4096 x 36 bits, two contexts"]
+  cap --> ram["work RAM<br/>4096 x 44 bits, two contexts"]
   ram --> fft["one FFT processor, in place:<br/>window pass, log2 n radix-2 passes,<br/>block floating point per bin"]
   fft --> ram
   ram --> out["the middle n/2 points of each bin:<br/>power, float32"]
@@ -569,11 +569,11 @@ flowchart TD
 `{tag[5:0], shift[2:0], logn[3:0], B − 1 [7:0], k0[10:0]}`, logn 3..11,
 B · n ≤ 4096. A 16-deep queue (LUT RAM); CFG 0xA0 bit 2 turns the engine
 on (off: the queue and both contexts cleared). STS 0x58: `{capability
-(1), 3'd0, sticky queue-overflow, 5'd0, queue free [4:0], jobs done
-[15:0]}`; it reads 0 on bitstreams without the engine, so software can
-ask.
+(1) [31:28], sticky queue-overflow [24], queue free [20:16], jobs done
+[15:0]}` (bit 25: a job out of range was dropped); it reads 0 on
+bitstreams without the engine, so software can ask.
 
-**Work RAM and contexts.** One true dual-port RAM, 4096 x 36 bits (4
+**Work RAM and contexts.** One true dual-port RAM, 4096 x 44 bits (5
 BRAM36). Two contexts, the halves: a job of up to 2048 samples takes
 one, a larger job both (it waits for both). A context goes capture →
 FFT → output → idle; capture starts at a frame's start.
@@ -581,11 +581,12 @@ FFT → output → idle; capture starts at a frame's start.
 **Capture.** As the bins stream past, bin k0 + b of the job's frame t
 is written to `{b, bitrev(t)}` (b · n + the bit-reversed t: the FFT then
 runs in place with its output in order). The sample is the 25-bit bin
-shifted right by `shift` (rounded), saturated to 18 bits; a saturation
+shifted right by `shift` (rounded), saturated to 22 bits; a saturation
 sets the job's flag. Shift 3 keeps the ADC's noise in a bin at 6.6 LSB
-rms (53 LSB of the 25-bit bin) with room up to −24 dBFS in one bin; the
-server raises the shift of a job whose bins the power line shows
-stronger. No multiplier here: two contexts may capture the same clock.
+rms (53 LSB of the 25-bit bin) with room up to a full-scale sine in one
+bin, just; the server takes 4 for a job whose bins the power line shows
+above −6 dBFS. No multiplier here: two contexts may capture the same
+clock.
 
 **FFT processor** (one, serving the context that finished capturing;
 both ports, stalled in the clocks a capture writes):
@@ -595,21 +596,29 @@ both ports, stalled in the clocks a capture writes):
   stride 2048/n; symmetric: 1024 entries x 17 bits, a RAMB18, the peak a
   constant), on the butterfly's four multipliers (two samples every
   two clocks, as a butterfly).
-  Windowing after the 18-bit capture costs 0.03 dB of floor.
 * **Passes**: radix-2, decimation in time, a butterfly every two clocks
   (two reads, two writes): n · log2 n clocks an FFT. Twiddles from the
   split stage's quarter-wave table through its free port (W_4096^k, 18
   bits; pass p uses every 4096/2^p th).
-* **Block floating point per bin**: 18-bit words can't hold both a
+* **Block floating point per bin**: the words can't hold both a
   carrier's growth (n) and the noise's (√n) with a fixed scaling. Each
-  pass halves its outputs (rounded) if the data before it reached 2^15,
-  quarters them if 2^16, from a magnitude tracker over the pass before
-  (the first pass: over the job's capture); the bin's exponent e counts
-  the halvings. A bin of noise is never scaled; a carrier costs only its
-  own bin precision.
+  pass halves or quarters its outputs (rounded) by the largest top five
+  bits m of any component the pass before wrote for the bin (the first
+  pass: the window pass): no shift for m < 13, one for m < 26, else two
+  (a butterfly grows a component by at most 1 + √2, so nothing
+  overflows); the bin's exponent e counts the shifts. A bin of noise is
+  never scaled; a carrier costs only its own bin precision.
+* **22 bits, by the model** (`scripts/zoom_model.py quality`: the floor
+  beside a carrier against a float FFT of the same bins, 40 spectra).
+  Noise alone: +0.1 dB at any n. With 18-bit words a −30 dBFS carrier
+  raised its own bin's floor by 2.6 dB at n = 128 and 12 dB at n = 2048
+  (17 dB with thresholds at 2^15 and 2^16): a brighter 30 kHz stripe
+  around every strong station. With 22: +0.35 dB at most up to −30 dBFS;
+  a −10 dBFS carrier +2 dB at n = 128 and +11 dB at n = 2048, in its
+  own bin only; the next bin +0.1 to 0.4 dB throughout.
 
 **Output.** For each bin, lowest first, points j = −n/4 .. n/4 − 1 (the
-middle 30 kHz, ascending): re² + im² (two DSP), as a float32 with 2 · (e
+middle 30 kHz, ascending): re² + im² (exact), as a float32 with 2 · (e
 + shift) added to its exponent, mantissa truncated (as the power line's
 `power_f32`). The server divides by the window's gain. On the power
 ring in the power line's framing: chunks of a header `{0x5042, 3,
@@ -620,9 +629,9 @@ only while the power line isn't sending and the ring writer's FIFO has
 room for it (the results wait in the work RAM), so the power line's
 timing is untouched.
 
-**Cost (estimate)**: 4.5 BRAM36 (to 59 of 60; the FFT's 254-word delay
-line back in LUT RAM would return one), 6 DSP (to 71), about 1200 LUTs
-(to about 72 %). No new AXI master, ring or interrupt.
+**Cost (estimate)**: 5.5 BRAM36 (the work RAM and the window; with the
+FFT's 254-word delay line back in LUT RAM, 59 of 60), 8 DSP (to 73),
+about 1500 LUTs (to about 75 %). No new AXI master, ring or interrupt.
 
 **Driver and server.**
 
@@ -648,9 +657,9 @@ both to be measured (step 2 below) before the RTL is written.
 **Steps.**
 
 1. `scripts/zoom_model.py`, bit-exact reference (capture, window,
-   passes with their scaling, power): against a float FFT of the same
-   bins for the floor, a carrier's skirt and the saturation rule; this
-   settles the 18-bit words and the scaling thresholds.
+   passes with their scaling, power) ✓ (2026-11-11): against a float FFT
+   of the same bins it settled 22-bit words and the scaling thresholds
+   (above).
 2. Server: the job interface, the iq backend's software engine, views on
    jobs, the scheduler; the A9's cost per view from a bench.
 3. `rtl/fft/pfb_zoom.v` against the model's vectors (`make sim-zoom`),

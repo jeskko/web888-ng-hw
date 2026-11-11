@@ -32,7 +32,10 @@ module pfb_chain #(
   output wire signed [W-1:0]    out_im,
   output wire [LOGM-2:0]        out_k,
   output wire                   out_valid,
-  output reg  [15:0]            out_frame = 0
+  output reg  [15:0]            out_frame = 0,
+  // the split stage's twiddle ROM, its other port
+  input  wire [LOGM-3:0]        tw2_addr,
+  output wire [35:0]            tw2_q
 );
 
   localparam integer LOGN = LOGM - 1;
@@ -88,7 +91,7 @@ module pfb_chain #(
     .clk(clk), .ce(ce), .in_re(z_re), .in_im(z_im), .in_idx(z_idx),
     .in_odd(now[0]), .in_valid(now[1]),
     .out_re(out_re), .out_im(out_im), .out_k(out_k), .out_frame(s_frame),
-    .out_valid(out_valid));
+    .out_valid(out_valid), .tw2_addr(tw2_addr), .tw2_q(tw2_q));
 
   // count valid frames out
   always @(posedge clk)

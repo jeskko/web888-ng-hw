@@ -72,7 +72,8 @@ module tb_top;
   .m_axi_``p``_rlast(1'b0), .m_axi_``p``_rvalid(1'b0)
 
   pfb_top #(.COEF_PREFIX("../rtl/gen/pfb_coef_"), .TW_PREFIX("../rtl/gen/pfb_tw_"),
-            .SPLIT_FILE("../rtl/gen/pfb_split_tw.mem")) dut (
+            .SPLIT_FILE("../rtl/gen/pfb_split_tw.mem"),
+            .ZOOM_WIN_FILE("../rtl/gen/zoom_win.mem")) dut (
     .clk(clk), .rst(rst), .adc(adc_in),
     .bins_enable(bins_en), .mask_we(mask_we), .mask_addr(mask_addr), .mask_data(mask_data),
     .gen_req(gen_req), .gen(gen), .truncated(truncated),
@@ -81,6 +82,8 @@ module tb_top;
     .power_enable(power_en), .power_frames(16'd2), .power_addr(PW_BASE), .power_len_m1(16'd127),
     .power_ptr(power_ptr), .power_overflow(power_ovf), .power_frames_out(power_frames_out),
     .power_drops(power_drops), .power_bresp_err(power_berr),
+    .zoom_enable(1'b0), .zoom_job_we(1'b0), .zoom_job(32'd0),
+    .zoom_free(), .zoom_done(), .zoom_ovf(), .zoom_bad(),
     `AXI_PORTS(bn),
     `AXI_PORTS(pw));
 
