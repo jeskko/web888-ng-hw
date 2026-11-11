@@ -10,7 +10,7 @@ the server. The contract was recovered from the open server code and the
 driver (see `../docs/`), and is documented in `doc/register-map.md`.
 
 **Status:** HF and VHF from release v0.2.0 (2026-10-28); v0.3.0 added
-the channelizer, and its HF/VHF rebuilds (shared code changed) haven't
+the channelizer, v0.4.0 its zoom engine, and their HF/VHF rebuilds (shared code changed) haven't
 run on hardware yet. The HF bitstream runs on a
 stock Web-888 with the stock driver (`../docs/hardware-test-plan.md`):
 48 k frames/s, web888d with web users and FT8/FT4/WSPR skimmers for an
@@ -22,7 +22,9 @@ which the PS holds while fclk0 is gated; now a PL power-on counter).
 `make pfb`, released in v0.3.0; `../docs/channelizer.md`): the whole HF
 band in 30 kHz bins, a power line and a tuner for 32 receivers. It is
 not stock-compatible (web888d's bins mode, the open driver) and has run
-on the project's unit since 2026-10-29.
+on the project's unit since 2026-10-29. v0.4.0 adds its zoom engine
+(power spectra of runs of bins for zoomed waterfalls; on the unit since
+2026-11-11).
 
 ## Architecture
 
