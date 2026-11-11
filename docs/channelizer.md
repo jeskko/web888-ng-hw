@@ -504,7 +504,7 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   left the headerless ring a part-frame off (every channel another's
   samples): fixed both in web888d and in the RTL.
 
-### 3.9 Zoom spectra (2026-11-11: built, timing met; not yet on the unit)
+### 3.9 Zoom spectra (2026-11-11: built, timing met, on the unit)
 
 A zoomed waterfall view is today the server's largest cost per session:
 on the unit, a session's own 240-480 kHz view adds 7-9 % of a core on
@@ -673,9 +673,14 @@ both to be measured (step 2 below) before the RTL is written.
    second frame: the stream whole, every line and spectrum right). Not
    simulated: a reset mid-run, the engine switched off during an FFT.
 4. Driver ioctls (`ZSDR_PFB_ZOOM`, `ZSDR_PFB_ZOOM_INFO`) ✓ and the
-   zynqsdr backend ✓ (against a fake driver). Open: the unit, with the
-   load test of 8 and 16 distinct views against server
-   `doc/m6-channelizer.md` §6's table.
+   zynqsdr backend ✓. **On the unit** (2026-11-11, hw CI 43068822343's
+   bitstream, the driver with the unit kernel's symbol CRCs, web888d
+   af628da): a 480 kHz view's averaged spectrum through the engine and
+   through the CPU's FFTs (the engine switched off) agree: median
+   difference 0.04 to 0.18 dB, the floor −97.1 against −97.2 dB, the
+   same carriers. Load (server `doc/m6-channelizer.md` §6): 16 distinct
+   480 kHz views at 20 lines/s without a gap, the pool at 60 % of a core
+   (before: shedding to 17 lines/s at 99 %).
 
 **Open.**
 
@@ -805,4 +810,4 @@ both to be measured (step 2 below) before the RTL is written.
   I/Q: cheap, and planned with M6 anyway.
 * Wideband streaming (§3.5): in the channelizer bitstream or its own
   bitstream/firmware mode? First, the A9's sustained UDP send rate.
-* Zoom spectra in the PL (§3.9): built, not yet on the unit.
+* Zoom spectra in the PL (§3.9): on the unit since 2026-11-11.
