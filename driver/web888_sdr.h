@@ -159,6 +159,33 @@ struct zsdr_pfb_status {
 #define ZSDR_PFB_STATUS		_IOR(ZSDR_IOC_TYPE, 0x25, struct zsdr_pfb_status)
 
 /*
+ * The channelizer's zoom engine (register-map.md "The zoom engine"), in
+ * bitstreams that have one: power spectra of runs of bins. A job is the
+ * register word {tag[5:0], shift[2:0], logn[3:0], B - 1 [7:0], k0[10:0]};
+ * its result comes on the power stream (chunks of type 3), which must run.
+ * ZSDR_PFB_ZOOM queues the first `accepted` of `count` jobs (as many as
+ * the engine's queue has room for). Without the engine: EOPNOTSUPP, and
+ * zsdr_pfb_zoom_info.queue is 0.
+ */
+#define ZSDR_PFB_ZOOM_MAX	16
+struct zsdr_pfb_zoom {
+	__u32 count;			/* jobs[] in use, at most 16 */
+	__u32 accepted;			/* out */
+	__u32 jobs[ZSDR_PFB_ZOOM_MAX];
+};
+
+struct zsdr_pfb_zoom_info {
+	__u32 size;
+	__u32 queue;			/* the queue's depth; 0: no engine */
+	__u32 free;			/* places free now */
+	__u32 done;			/* jobs done (16 bits, wraps) */
+	__u32 flags;			/* bit 0 the queue overflowed, 1 a job out of range was dropped */
+};
+
+#define ZSDR_PFB_ZOOM		_IOWR(ZSDR_IOC_TYPE, 0x26, struct zsdr_pfb_zoom)
+#define ZSDR_PFB_ZOOM_INFO	_IOR(ZSDR_IOC_TYPE, 0x27, struct zsdr_pfb_zoom_info)
+
+/*
  * poll()/select() on /dev/zynqsdr: POLLIN when a running RX, WF, bins or
  * power stream has new data, POLLPRI when the PPS FIFO is not empty.
  */

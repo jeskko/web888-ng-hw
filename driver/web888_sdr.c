@@ -59,8 +59,11 @@
 
 #define CFG_SIZE	0xb4	/* stock 0xa0; 0xa0.. the channelizer's */
 #define STS_SIZE	0x58	/* stock maps 0x18; 0x18.. are extensions */
+#define STS_MAP		0x5c	/* with the zoom engine's word */
 #define PPS_SIZE	0x1000
 #define EV_SIZE		0x200
+#define EV_MAP		0x204	/* with the zoom engine's job word */
+#define EV_ZOOM		128
 #define EV_TUNE		64	/* the tuner's words: 64 + 2u (low), 65 + 2u (high) */
 #define TUNE_R2		40	/* the tuner's rate: 12 kS/s, as R2 = 40 */
 
@@ -82,6 +85,7 @@
 #define CFG_PFB_CTRL	0xa0
 #define  PFB_BINS	BIT(0)
 #define  PFB_POWER	BIT(1)
+#define  PFB_ZOOM	BIT(2)
 #define  PFB_GEN(g)	((g) << 4)
 #define CFG_BINS_ADDR	0xa4
 #define CFG_BINS_LEN	0xa8
@@ -110,6 +114,8 @@
 #define STS_BINS_DROPS	0x4c
 #define STS_PW_CHUNKS	0x50
 #define STS_PW_DROPS	0x54
+#define STS_ZOOM	0x58	/* [31:28] 1: the engine; 25 bad job, 24 overflow, [20:16] free, [15:0] done */
+#define ZOOM_QUEUE	16
 
 #define SIG_OPEN	0x0e5d
 #define SIG_PFB(sig)	(((sig) >> 4) & 0xf)	/* 1: the channelizer build */
@@ -164,7 +170,7 @@ struct zsdr {
 	void __iomem *sts;
 	void __iomem *pps;
 	void __iomem *ev;
-	resource_size_t cfg_len, sts_len;	/* as mapped (a DT may give less) */
+	resource_size_t cfg_len, sts_len, ev_len;	/* as mapped (a DT may give less) */
 	struct gpio_desc *gpio[NGPIOS];
 	struct miscdevice misc;
 
@@ -173,6 +179,7 @@ struct zsdr {
 	u32 build_id;		/* STS 0x18 at open (ext) */
 	bool ext;		/* open bitstream: extension registers */
 	bool pfb;		/* the channelizer build */
+	bool zoom;		/* with the zoom engine */
 	u16 ctrl;		/* shadow of CFG control (only this driver writes it) */
 	u16 pfb_ctrl;		/* and of CFG 0xa0 */
 	unsigned int nrx;
@@ -576,6 +583,8 @@ static int pl_attach(struct zsdr *z)
 	z->signature = sig;
 	z->ext = (sig >> 16) == SIG_OPEN;
 	z->pfb = pfb;
+	z->zoom = pfb && z->sts_len >= STS_MAP && z->ev_len >= EV_MAP &&
+		  (sts_r32(z, STS_ZOOM) >> 28) == 1;
 	z->build_id = z->ext ? sts_r32(z, STS_BUILD) : 0;
 
 	/* the channelizer's rings use RX's and WF0's interrupt lines, its
@@ -736,8 +745,9 @@ static long pfb_ioctl(struct zsdr *z, unsigned int cmd, void __user *up)
 			return -EINVAL;
 		if (!(st.streams & ZSDR_PFB_BINS))
 			v &= ~PFB_BINS;
+		/* the zoom engine runs with the power stream (its ring) */
 		if (!(st.streams & ZSDR_PFB_POWER))
-			v &= ~PFB_POWER;
+			v &= ~(PFB_POWER | PFB_ZOOM);
 		if (v != z->pfb_ctrl) {
 			pfb_ctrl_write(z, v);
 			/* a ring restarts once its outstanding bursts drained */
@@ -751,7 +761,7 @@ static long pfb_ioctl(struct zsdr *z, unsigned int cmd, void __user *up)
 		}
 		if ((st.streams & ZSDR_PFB_POWER) && !(v & PFB_POWER)) {
 			stream_program(z, S_PW);
-			v |= PFB_POWER;
+			v |= PFB_POWER | (z->zoom ? PFB_ZOOM : 0);
 		}
 		pfb_ctrl_write(z, v);
 		return 0;
@@ -783,6 +793,38 @@ static long pfb_ioctl(struct zsdr *z, unsigned int cmd, void __user *up)
 		st.power_dropped = sts_r32(z, STS_PW_DROPS);
 		return copy_to_user(up, &st, sizeof(st)) ? -EFAULT : 0;
 	}
+
+	case ZSDR_PFB_ZOOM: {
+		struct zsdr_pfb_zoom zm;
+		u32 n, i;
+
+		if (!z->zoom)
+			return -EOPNOTSUPP;
+		if (copy_from_user(&zm, up, sizeof(zm)))
+			return -EFAULT;
+		if (zm.count > ZSDR_PFB_ZOOM_MAX)
+			return -EINVAL;
+		if (!(z->pfb_ctrl & PFB_ZOOM))
+			return -ENXIO;	/* the power stream isn't running */
+		n = min(zm.count, (sts_r32(z, STS_ZOOM) >> 16) & 0x1f);
+		for (i = 0; i < n; i++)
+			writel(zm.jobs[i], z->ev + 4 * EV_ZOOM);
+		return put_user(n, &((struct zsdr_pfb_zoom __user *)up)->accepted);
+	}
+
+	case ZSDR_PFB_ZOOM_INFO: {
+		struct zsdr_pfb_zoom_info in = { .size = sizeof(in) };
+
+		if (z->zoom) {
+			u32 s = sts_r32(z, STS_ZOOM);
+
+			in.queue = ZOOM_QUEUE;
+			in.free = (s >> 16) & 0x1f;
+			in.done = s & 0xffff;
+			in.flags = (s >> 24) & 3;
+		}
+		return copy_to_user(up, &in, sizeof(in)) ? -EFAULT : 0;
+	}
 	}
 	return -ENOTTY;
 }
@@ -805,6 +847,7 @@ static long zsdr_ioctl_locked(struct zsdr *z, unsigned int cmd,
 		break;
 	case ZSDR_PFB_INFO: case ZSDR_PFB_SET_MASK: case ZSDR_PFB_START:
 	case ZSDR_PFB_READ: case ZSDR_PFB_STATUS:
+	case ZSDR_PFB_ZOOM: case ZSDR_PFB_ZOOM_INFO:
 		if (!z->pfb)
 			return -ENODEV;
 		return pfb_ioctl(z, cmd, up);
@@ -1071,13 +1114,13 @@ static int zsdr_probe(struct platform_device *pdev)
 	z->cfg = map_window(pdev, 0, CFG_PHYS, CFG_SIZE, &z->cfg_len);
 	if (IS_ERR(z->cfg))
 		return PTR_ERR(z->cfg);
-	z->sts = map_window(pdev, 1, STS_PHYS, STS_SIZE, &z->sts_len);
+	z->sts = map_window(pdev, 1, STS_PHYS, STS_MAP, &z->sts_len);
 	if (IS_ERR(z->sts))
 		return PTR_ERR(z->sts);
 	z->pps = map_window(pdev, 2, PPS_PHYS, PPS_SIZE, NULL);
 	if (IS_ERR(z->pps))
 		return PTR_ERR(z->pps);
-	z->ev = map_window(pdev, 3, EV_PHYS, EV_SIZE, NULL);
+	z->ev = map_window(pdev, 3, EV_PHYS, EV_MAP, &z->ev_len);
 	if (IS_ERR(z->ev))
 		return PTR_ERR(z->ev);
 	if (of_machine_is_compatible("xlnx,zynq-7000")) {

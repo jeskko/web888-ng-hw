@@ -92,8 +92,8 @@ zynqsdr {
 /* web888-ng */
 sdr@40000000 {
 	compatible = "web888-ng,sdr";
-	reg = <0x40000000 0xb4>, <0x41000000 0x58>, <0x42000000 0x1000>,
-	      <0x43000000 0x100>;	/* CFG, STS, PPS FIFO, EV (the mask) */
+	reg = <0x40000000 0x1000>, <0x41000000 0x1000>, <0x42000000 0x1000>,
+	      <0x43000000 0x1000>;	/* CFG, STS, PPS FIFO, EV (mask, tuner, zoom jobs) */
 	interrupt-parent = <&intc>;
 	interrupts = <0 29 1>, <0 30 1>, <0 31 1>, <0 32 1>;	/* RX, WF0, WF1, PPS */
 	gpios = <&gpio0 10 1>, <&gpio0 13 1>, <&gpio0 12 1>, <&gpio0 11 1>,
