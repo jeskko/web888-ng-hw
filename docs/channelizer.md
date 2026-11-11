@@ -5,7 +5,8 @@ Status: **released** in web888-ng-hw v0.3.0 (`websdr_pfb.bit`,
 DMAs) and the bins tuner (§3.8) are bit-exact to the model in
 simulation; timing is met with the guardband. It has run on the
 project's unit since 2026-10-29: web888d in bins mode, 32 tuner channels
-and FT8 skimmers on ten bands. Progress notes: §5. This is the core of
+and FT8 skimmers on ten bands. v0.4.0 (2026-11-11) adds the zoom
+engine (§3.9). Progress notes: §5. This is the core of
 the open-FPGA milestone (server design §11, M6).
 It drops compatibility with the stock server's FPGA interface. The
 stock bitstream stays usable as a fallback with its own backend.
