@@ -163,7 +163,8 @@ module pfb_fir #(
   generate
     for (t = 0; t < NR; t = t + 1) begin : g_rom
       localparam [7:0] DIGIT = 8'h30 + t;   // T <= 19: one digit
-      reg [2*CB-1:0] rom [0:D-1];
+      // pinned: synthesis otherwise builds the narrow outer-tap ROMs from LUTs
+      (* rom_style = "block" *) reg [2*CB-1:0] rom [0:D-1];
       reg [2*CB-1:0] qa = 0, qb = 0, qa2 = 0, qb2 = 0;
       initial $readmemh({COEF_PREFIX, DIGIT, ".mem"}, rom);
       always @(posedge clk)

@@ -4,12 +4,13 @@
 
 // Fixed delay of D clock-enabled cycles: out = the `in` of D enabled
 // cycles ago. Short delays are a shift register; long ones a RAM of
-// D - 1 words with a registered read-first output (block RAM), which adds
-// the last cycle.
+// D - 1 words with a registered read-first output, which adds the last
+// cycle; from BLOCK_MIN on in block RAM.
 
 module delay_line #(
   parameter integer W = 50,
-  parameter integer D = 1024
+  parameter integer D = 1024,
+  parameter integer BLOCK_MIN = 250
 ) (
   input  wire         clk,
   input  wire         ce,
@@ -29,13 +30,13 @@ module delay_line #(
         end
       assign out = sr[D-1];
     end else begin : g_ram
-      // 512 words and more pinned to block RAM (synthesis otherwise moves
-      // them to LUT RAM when other block RAM users come)
+      // BLOCK_MIN words and more pinned to block RAM (synthesis otherwise
+      // puts them in LUT RAM)
       localparam integer A = $clog2(D - 1);
       reg [W-1:0] q = {W{1'b0}};
       reg [A-1:0] ptr = {A{1'b0}};
       integer i;
-      if (D >= 512) begin : g_block
+      if (D >= BLOCK_MIN) begin : g_block
         (* ram_style = "block" *) reg [W-1:0] mem [0:D-2];
         initial for (i = 0; i < D - 1; i = i + 1) mem[i] = {W{1'b0}};
         always @(posedge clk)

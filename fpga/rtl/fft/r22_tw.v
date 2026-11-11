@@ -11,7 +11,10 @@
 //
 // The stage's own table: W_L^e for e < 3L/4 (`TW_FILE`, {re, im} TB bits
 // each; rtl/gen/pfb_tw_<pair>.mem from web888-dsp examples/pfbvectors.rs).
-// Six cycles of latency.
+// Six cycles of latency. From L = 2048 (FOLD) the table is a quarter wave
+// in block RAM: with e = q·L/4 + a, (r, i) = tw[a]: q = 0 gives (r, i),
+// q = 1 (i, -r), q = 2 (-r, -i); a register stage applies that after the
+// RAM's output register, so seven cycles.
 
 module r22_tw #(
   parameter integer W    = 25,
@@ -33,8 +36,7 @@ module r22_tw #(
   localparam integer LQ = $clog2(L / 4);
   localparam integer NT = 3 * L / 4;
 
-  reg [2*TB-1:0] tw [0:NT-1];
-  initial $readmemh(TW_FILE, tw);
+  localparam integer FOLD = (L >= 2048);
 
   // stage 0: the exponent from the position in the block (registered: the
   // 3r sum into the table's address was the channelizer's critical path)
@@ -55,20 +57,61 @@ module r22_tw #(
       idx0  <= in_idx;
     end
 
-  // stage 1: the sample and its twiddle
+  // the sample and its twiddle
   reg signed [W-1:0]  a_re = 0, a_im = 0;
   reg signed [TB-1:0] w_re = 0, w_im = 0;
   reg                 pass = 1'b1;
   reg [LOGN-1:0]      idx1 = 0;
-  always @(posedge clk)
-    if (ce) begin
-      a_re <= a0_re;
-      a_im <= a0_im;
-      w_re <= tw[e0][2*TB-1:TB];
-      w_im <= tw[e0][TB-1:0];
-      pass <= (e0 == {(LQ+2){1'b0}});
-      idx1 <= idx0;
+
+  generate
+    if (FOLD) begin : g_fold
+      (* rom_style = "block" *) reg [2*TB-1:0] tw [0:L/4-1];
+      initial $readmemh(TW_FILE, tw, 0, L/4-1);
+
+      // stage 1a: the table's word a and the quarter q (registered read)
+      reg [2*TB-1:0]      t1 = 0;
+      reg [1:0]           q1 = 2'b00;
+      reg signed [W-1:0]  a1_re = 0, a1_im = 0;
+      reg                 pass1 = 1'b1;
+      reg [LOGN-1:0]      idx1a = 0;
+      always @(posedge clk)
+        if (ce) begin
+          t1    <= tw[e0[LQ-1:0]];
+          q1    <= e0[LQ+1:LQ];
+          a1_re <= a0_re;
+          a1_im <= a0_im;
+          pass1 <= (e0 == {(LQ+2){1'b0}});
+          idx1a <= idx0;
+        end
+
+      // stage 1b: the quarter applied
+      wire signed [TB-1:0] t_re = t1[2*TB-1:TB];
+      wire signed [TB-1:0] t_im = t1[TB-1:0];
+      always @(posedge clk)
+        if (ce) begin
+          a_re <= a1_re;
+          a_im <= a1_im;
+          w_re <= q1[1] ? -t_re : q1[0] ?  t_im : t_re;
+          w_im <= q1[1] ? -t_im : q1[0] ? -t_re : t_im;
+          pass <= pass1;
+          idx1 <= idx1a;
+        end
+    end else begin : g_flat
+      reg [2*TB-1:0] tw [0:NT-1];
+      initial $readmemh(TW_FILE, tw);
+
+      // stage 1
+      always @(posedge clk)
+        if (ce) begin
+          a_re <= a0_re;
+          a_im <= a0_im;
+          w_re <= tw[e0][2*TB-1:TB];
+          w_im <= tw[e0][TB-1:0];
+          pass <= (e0 == {(LQ+2){1'b0}});
+          idx1 <= idx0;
+        end
     end
+  endgenerate
 
   // stages 2-5, one carry chain each (122.88 MHz): the four products
   // (DSP48), their sums, the rounding shift, the saturation
