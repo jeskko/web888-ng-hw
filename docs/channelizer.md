@@ -490,8 +490,10 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   0.5 BRAM36, the latter out of LUT logic). The room went to what
   synthesis had built from LUTs: the FIR's coefficient ROMs 0 and 1 and
   the FFT's 510- and 254-word delay lines (the 512-word pin missed them:
-  the butterfly passes D - 2). **LUT 83.8 % -> 64.7 %** (14 748 ->
-  11 386), BRAM 55.5 of 60, DSP 65; WNS +0.058 ns with the guardband
+  the butterfly passes D - 2). The tuner's 64-word ring FIFO, which
+  synthesis then put in a block RAM of its own, is pinned to LUT RAM
+  (hw a6e1f68, CI 43023497505). **LUT 83.8 % -> 65.4 %** (14 748 ->
+  11 515), **BRAM 54.5 of 60**, DSP 65; WNS +0.058 ns with the guardband
   (the ADC input pins, as before); bit-exact as before (`make sim`).
   Not yet on the unit.
 * **On the unit** (2026-10-29, `private/tune-test-kit`): 32 users at
