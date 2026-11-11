@@ -12,10 +12,10 @@
 // frame of N inputs gives N outputs.
 //
 // The FFT's frames arrive in its bit-reversed order (`in_idx` = in-place
-// position). A double buffer holds each frame while the next is written;
-// the frame before is read at bit-reversed k and N - k through both
-// ports. A frame starts where `in_idx` wraps from N - 1 to 0 (or at the
-// first input). `in_odd` and `in_valid` are the frame's parity and
+// position). A double buffer (two block RAMs) holds each frame while the
+// next is written; the frame before is read at bit-reversed k and N - k
+// through both ports. The twiddles are a quarter-wave table. A frame
+// starts where `in_idx` wraps from N - 1 to 0 (or at the first input). `in_odd` and `in_valid` are the frame's parity and
 // validity, sampled at its start; `out_valid` carries the latter.
 //
 // Arithmetic as the fixed-point model (web888-dsp `pfbfx`): sums exact,
@@ -53,10 +53,13 @@ module pfb_split #(
     end
   endfunction
 
-  // ---- double buffer: write the frame arriving, read the one before
-  reg [2*W-1:0] mem [0:2*N-1];
-  reg [2*TB-1:0] tw [0:N];
-  initial $readmemh(TW_FILE, tw);
+  // ---- double buffer: two memories of N words, one written with the frame
+  // arriving (wsel_now), the other read for the frame before
+  (* ram_style = "block" *) reg [2*W-1:0] mem0 [0:N-1];
+  (* ram_style = "block" *) reg [2*W-1:0] mem1 [0:N-1];
+  // twiddles: a quarter wave, W_2N^k for k < N/2 (k >= N/2 is (im, -re) of k - N/2)
+  (* rom_style = "block" *) reg [2*TB-1:0] tw [0:N/2-1];
+  initial $readmemh(TW_FILE, tw, 0, N/2-1);
 
   reg        wsel = 1'b0;
   reg  [1:0] odd_of = 2'b00, valid_of = 2'b00;
@@ -67,15 +70,37 @@ module pfb_split #(
   wire [LOGN-1:0] k  = in_idx;           // the bin read now (in order)
   wire [LOGN-1:0] nk = -in_idx;          // N - k, mod N
 
-  // read stage 1: both partners, the twiddle, the bin's bookkeeping
-  reg [2*W-1:0]  za = 0, zb = 0;
-  reg [2*TB-1:0] w1 = 0;
-  reg [LOGN-1:0] k1 = 0;
-  reg            odd1 = 1'b0, val1 = 1'b0;
-  reg [15:0]     f1 = 0;
+  // port A of a memory writes at in_idx while it is the one being written,
+  // else reads bitrev(k); port B reads bitrev(nk)
+  wire            wr0 = ~wsel_now, wr1 = wsel_now;
+  wire [LOGN-1:0] aa0 = wr0 ? in_idx : bitrev(k);
+  wire [LOGN-1:0] aa1 = wr1 ? in_idx : bitrev(k);
+  wire [LOGN-1:0] ab  = bitrev(nk);
+  reg [2*W-1:0]   qa0 = 0, qa1 = 0, qb0 = 0, qb1 = 0;
   always @(posedge clk)
     if (ce) begin
-      mem[{wsel_now, in_idx}] <= {in_re, in_im};
+      if (wr0) mem0[aa0] <= {in_re, in_im};
+      else     qa0 <= mem0[aa0];
+    end
+  always @(posedge clk)
+    if (ce) begin
+      if (wr1) mem1[aa1] <= {in_re, in_im};
+      else     qa1 <= mem1[aa1];
+    end
+  always @(posedge clk)
+    if (ce) qb0 <= mem0[ab];
+  always @(posedge clk)
+    if (ce) qb1 <= mem1[ab];
+
+  // read stage 1: the memories' and the twiddle ROM's output registers, the
+  // bin's bookkeeping
+  reg [2*TB-1:0] wq = 0;
+  reg            rsel0 = 1'b0, kh0 = 1'b0;
+  reg [LOGN-1:0] k0 = 0;
+  reg            odd0 = 1'b0, val0 = 1'b0;
+  reg [15:0]     f0 = 0;
+  always @(posedge clk)
+    if (ce) begin
       prev_idx <= in_idx;
       if (first) begin
         odd_of[wsel_now]   <= in_odd;
@@ -83,16 +108,33 @@ module pfb_split #(
         frames <= frames + 1'b1;
       end
       wsel <= wsel_now;
-      za   <= mem[{~wsel_now, bitrev(k)}];
-      zb   <= mem[{~wsel_now, bitrev(nk)}];
-      w1   <= tw[k];
-      k1   <= k;
-      odd1 <= odd_of[~wsel_now];
-      val1 <= valid_of[~wsel_now];
-      f1   <= first ? frames : f1;
+      wq    <= tw[k[LOGN-2:0]];
+      kh0   <= k[LOGN-1];
+      rsel0 <= ~wsel_now;                // the memory read
+      k0    <= k;
+      odd0  <= odd_of[~wsel_now];
+      val0  <= valid_of[~wsel_now];
+      f0    <= first ? frames : f0;
     end
 
-  // stage 2: e = Zk + Z*[N-k], o = (Zk - Z*[N-k]) / j, exact
+  // read stage 2: pick the memory read, unfold the twiddle
+  reg [2*W-1:0]  za = 0, zb = 0;
+  reg [2*TB-1:0] w1 = 0;
+  reg [LOGN-1:0] k1 = 0;
+  reg            odd1 = 1'b0, val1 = 1'b0;
+  reg [15:0]     f1 = 0;
+  always @(posedge clk)
+    if (ce) begin
+      za   <= rsel0 ? qa1 : qa0;
+      zb   <= rsel0 ? qb1 : qb0;
+      w1   <= kh0 ? {wq[TB-1:0], -wq[2*TB-1:TB]} : wq;   // k >= N/2: (im, -re)
+      k1   <= k0;
+      odd1 <= odd0;
+      val1 <= val0;
+      f1   <= f0;
+    end
+
+  // stage 3: e = Zk + Z*[N-k], o = (Zk - Z*[N-k]) / j, exact
   wire signed [W-1:0] a_re = za[2*W-1:W], a_im = za[W-1:0];
   wire signed [W-1:0] b_re = zb[2*W-1:W], b_im = zb[W-1:0];
   reg signed [W:0]    e_re = 0, e_im = 0, o_re = 0, o_im = 0;
@@ -115,7 +157,7 @@ module pfb_split #(
       f2   <= f1;
     end
 
-  // stages 3-8, one carry chain each (122.88 MHz): the four products
+  // stages 4-9, one carry chain each (122.88 MHz): the four products
   // (DSP48), their sums, the product rounded by TB - 1 bits (not
   // saturated), e + o', its halving and saturation, then conjugation and
   // the odd bins' sign on odd frames (both wrap like the model's W-bit
@@ -123,7 +165,7 @@ module pfb_split #(
   localparam integer PW = W + 1 + TB + 1;     // the sums of products
   localparam integer MW = PW - TB + 1;        // after the rounding shift
   localparam integer TW = MW + 1;             // e + o'
-  localparam integer DL = 5;                  // stages 3..7 before the output
+  localparam integer DL = 5;                  // stages 4..8 before the output
   reg signed [W+1+TB-1:0] q_rr = 0, q_ii = 0, q_ri = 0, q_ir = 0;
   reg signed [PW-1:0]     p_re = 0, p_im = 0;
   reg signed [MW-1:0]     m_re = 0, m_im = 0;
@@ -159,24 +201,24 @@ module pfb_split #(
 
   always @(posedge clk)
     if (ce) begin
-      // 3: products
+      // 4: products
       q_rr <= o_re * w_re;
       q_ii <= o_im * w_im;
       q_ri <= o_re * w_im;
       q_ir <= o_im * w_re;
-      // 4: sums
+      // 5: sums
       p_re <= q_rr - q_ii;
       p_im <= q_ri + q_ir;
-      // 5: rounded
+      // 6: rounded
       m_re <= (p_re + (1 <<< (TB - 2))) >>> (TB - 1);
       m_im <= (p_im + (1 <<< (TB - 2))) >>> (TB - 1);
-      // 6: e + o' (e from stage 2, three stages back)
+      // 7: e + o' (e from stage 3, three stages back)
       t_re <= ed_re[2] + m_re;
       t_im <= ed_im[2] + m_im;
-      // 7: halved, saturated
+      // 8: halved, saturated
       x_re <= fit(t_re);
       x_im <= fit(t_im);
-      // 8: conjugated, odd bins of odd frames negated
+      // 9: conjugated, odd bins of odd frames negated
       out_re    <= (oddd[DL-1] && kd[DL-1][0]) ? -x_re : x_re;
       out_im    <= (oddd[DL-1] && kd[DL-1][0]) ? x_im : -x_im;
       out_k     <= kd[DL-1];
