@@ -72,6 +72,7 @@ sim-top: | sim/out
 	  rtl/fft/pfb_select.v rtl/fft/pfb_power.v rtl/fft/pfb_zoom.v rtl/fft/pfb_top.v rtl/axi_ring_writer.v rtl/sync_fifo.v
 	cd sim && $(VVP) -n out/tb_top.vvp | tee out/tb_top.log
 	grep -q "tb_top: PASSED" sim/out/tb_top.log
+	$(PYTHON) scripts/zoom_model.py check sim/out/top_zoom_in.txt sim/out/top_zoom_out.txt
 
 # the bins tuner alone, bit-exact against scripts/tune_model.py
 sim-tune: $(TABLES) | sim/out
