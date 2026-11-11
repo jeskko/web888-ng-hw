@@ -504,7 +504,7 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   left the headerless ring a part-frame off (every channel another's
   samples): fixed both in web888d and in the RTL.
 
-### 3.9 Zoom spectra (design, 2026-11-11; not built)
+### 3.9 Zoom spectra (2026-11-11: built, timing met; not yet on the unit)
 
 A zoomed waterfall view is today the server's largest cost per session:
 on the unit, a session's own 240-480 kHz view adds 7-9 % of a core on
@@ -629,9 +629,13 @@ only while the power line isn't sending and the ring writer's FIFO has
 room for it (the results wait in the work RAM), so the power line's
 timing is untouched.
 
-**Cost (estimate)**: 5.5 BRAM36 (the work RAM and the window; with the
-FFT's 254-word delay line back in LUT RAM, 59 of 60), 8 DSP (to 73),
-about 1500 LUTs (to about 75 %). No new AXI master, ring or interrupt.
+**Cost** (hw CI 43068822343): the engine 2174 LUTs, 5.5 BRAM36 (the work
+RAM and the window), 6 DSP at synthesis; the build LUT 77.5 % (13 637),
+BRAM 59 of 60 (the FFT's 254-word delay line back in LUT RAM), DSP 71 of
+80; **WNS +0.058 ns** with the guardband (the ADC input pins, as
+before). A first run missed it by 6 ps in the tuner, not the engine:
+a user's phase read, restarted and stepped in one clock; now two (the
+tuner still bit-exact). No new AXI master, ring or interrupt.
 
 **Driver and server.**
 
@@ -660,12 +664,18 @@ both to be measured (step 2 below) before the RTL is written.
    passes with their scaling, power) ✓ (2026-11-11): against a float FFT
    of the same bins it settled 22-bit words and the scaling thresholds
    (above).
-2. Server: the job interface, the iq backend's software engine, views on
-   jobs, the scheduler; the A9's cost per view from a bench.
-3. `rtl/fft/pfb_zoom.v` against the model's vectors (`make sim-zoom`),
-   the power ring's merge, registers; CI for resources and timing.
-4. Driver ioctl, the zynqsdr backend, the unit: the load test of 8 and
-   16 distinct views against server `doc/m6-channelizer.md` §6's table.
+2. ✓ (server `doc/m6-channelizer.md` §6): on the A9 a 480 kHz view on
+   jobs costs 0.83 % of a core, 8.3 % on its own FFTs.
+3. `rtl/fft/pfb_zoom.v` ✓: `make sim-zoom` (24 jobs equal to the model:
+   n 8 to 2048, 1 to 256 bins, both contexts, concurrent captures,
+   saturation, a full queue, bad jobs, the engine switched off mid-run)
+   and `make sim-top` (six jobs sharing the ring with a power line every
+   second frame: the stream whole, every line and spectrum right). Not
+   simulated: a reset mid-run, the engine switched off during an FFT.
+4. Driver ioctls (`ZSDR_PFB_ZOOM`, `ZSDR_PFB_ZOOM_INFO`) ✓ and the
+   zynqsdr backend ✓ (against a fake driver). Open: the unit, with the
+   load test of 8 and 16 distinct views against server
+   `doc/m6-channelizer.md` §6's table.
 
 **Open.**
 
@@ -795,4 +805,4 @@ both to be measured (step 2 below) before the RTL is written.
   I/Q: cheap, and planned with M6 anyway.
 * Wideband streaming (§3.5): in the channelizer bitstream or its own
   bitstream/firmware mode? First, the A9's sustained UDP send rate.
-* Zoom spectra in the PL (§3.9): designed, not built.
+* Zoom spectra in the PL (§3.9): built, not yet on the unit.
