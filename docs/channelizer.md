@@ -504,6 +504,171 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   left the headerless ring a part-frame off (every channel another's
   samples): fixed both in web888d and in the RTL.
 
+### 3.9 Zoom spectra (design, 2026-11-11; not built)
+
+A zoomed waterfall view is today the server's largest cost per session:
+on the unit, a session's own 240-480 kHz view adds 7-9 % of a core on
+the DSP pool and about 1 % on the hw thread, two to three times its
+audio (server `doc/m6-channelizer.md` §6). The CPU reads the view's bins
+in bursts and puts each through an FFT. The bins are all there in the
+PL every frame, so the FFTs can be too: the zoom engine (`pfb_zoom`)
+takes jobs, "bins k0 .. k0 + B − 1, FFT length n", and puts each job's
+power spectrum on the power ring. The device has the room since §3.8's
+last step (LUT 65 %, BRAM 54.5 of 60, 15 DSP free).
+
+```mermaid
+flowchart TD
+  bins["the chain's bins<br/>one per clock, k = 0..2047"] --> cap["capture: n frames of B bins<br/>18-bit I/Q, bit-reversed order"]
+  jobs["job queue (EV window)<br/>k0, B, n, shift, tag"] --> cap
+  cap --> ram["work RAM<br/>4096 x 36 bits, two contexts"]
+  ram --> fft["one FFT processor, in place:<br/>window pass, log2 n radix-2 passes,<br/>block floating point per bin"]
+  fft --> ram
+  ram --> out["the middle n/2 points of each bin:<br/>power, float32"]
+  out --> ring["power ring (HP1)<br/>chunks of type 3, between the power line's"]
+```
+
+**The numbers that shape it.**
+
+* A view's FFT length is the server's today (`binview.rs`): bins no
+  wider than a display pixel, n = 2^ceil(log2(60 000 · px / span)), and
+  of each bin's spectrum the middle n/2 points (±15 kHz), side by side.
+  So a view of px points takes about 2 · px samples a spectrum,
+  whatever its span:
+
+  | span (1024 px) | bins B | n | samples B · n | capture |
+  |---|---|---|---|---|
+  | 7.68 MHz | 257 (two jobs: B ≤ 256) | 8 | 2056 | 0.13 ms |
+  | 960 kHz | 33 | 64 | 2112 | 1.1 ms |
+  | 480 kHz | 17 | 128 | 2176 | 2.1 ms |
+  | 240 kHz | 9 | 256 | 2304 | 4.3 ms |
+  | 60 kHz | 3 | 1024 | 3072 | 17 ms |
+  | 30 kHz | 2 | 2048 | 4096 | 34 ms |
+
+* **Memory is the limit, by time.** A spectrum of resolution df takes
+  1/df seconds of every bin it covers: B · n samples held for n frames.
+  The arithmetic is nothing next to that (a 480 kHz job's FFTs take 0.15
+  ms). So the engine is one work RAM of 4096 samples, and its capacity
+  is 60 000 / n spectra a second for views that fill it: 468 a second
+  at n = 128, 234 at n = 256.
+* **No overlap, no averaging in the PL.** The CPU overlaps its FFTs by
+  half to read fewer frames; here the frames are free, so blocks don't
+  overlap (no samples kept between FFTs). Averaging A spectra a line
+  would need an accumulator per view in flight (16 views: 15 BRAM36), so
+  each job is one spectrum and the server sums a line's jobs: 4.4 KB a
+  job against the 2 MB/s of bins a 480 kHz view reads today.
+* **What that buys**, at 20 lines/s and n = 128 (480 kHz views at 1024
+  px): 4 distinct views with 5.8 spectra a line (today's budget is 6), 8
+  with 2.9, 16 with 1.5; at 10 lines/s twice the views. Under load the
+  server may take n one step lower (FFT bins two pixels wide): half the
+  capture time and half the samples, so four times the spectra. Views
+  several sessions share count once; views wider than 7.68 MHz stay on
+  the power line, and views inside a channel (12 kHz and under) on the
+  RX channel's samples, as now.
+
+**Jobs.** One 32-bit word through the EV window (word 128):
+`{tag[5:0], shift[2:0], logn[3:0], B − 1 [7:0], k0[10:0]}`, logn 3..11,
+B · n ≤ 4096. A 16-deep queue (LUT RAM); CFG 0xA0 bit 2 turns the engine
+on (off: the queue and both contexts cleared). STS 0x58: `{capability
+(1), 3'd0, sticky queue-overflow, 5'd0, queue free [4:0], jobs done
+[15:0]}`; it reads 0 on bitstreams without the engine, so software can
+ask.
+
+**Work RAM and contexts.** One true dual-port RAM, 4096 x 36 bits (4
+BRAM36). Two contexts, the halves: a job of up to 2048 samples takes
+one, a larger job both (it waits for both). A context goes capture →
+FFT → output → idle; capture starts at a frame's start.
+
+**Capture.** As the bins stream past, bin k0 + b of the job's frame t
+is written to `{b, bitrev(t)}` (b · n + the bit-reversed t: the FFT then
+runs in place with its output in order). The sample is the 25-bit bin
+shifted right by `shift` (rounded), saturated to 18 bits; a saturation
+sets the job's flag. Shift 3 keeps the ADC's noise in a bin at 6.6 LSB
+rms (53 LSB of the 25-bit bin) with room up to −24 dBFS in one bin; the
+server raises the shift of a job whose bins the power line shows
+stronger. No multiplier here: two contexts may capture the same clock.
+
+**FFT processor** (one, serving the context that finished capturing;
+both ports, stalled in the clocks a capture writes):
+
+* **Window pass**: each sample times the 4-term Blackman-Harris window
+  the server uses (periodic, so length n is the 2048-point table at
+  stride 2048/n; symmetric: 1024 entries x 17 bits, a RAMB18, the peak a
+  constant), on the butterfly's four multipliers (two samples every
+  two clocks, as a butterfly).
+  Windowing after the 18-bit capture costs 0.03 dB of floor.
+* **Passes**: radix-2, decimation in time, a butterfly every two clocks
+  (two reads, two writes): n · log2 n clocks an FFT. Twiddles from the
+  split stage's quarter-wave table through its free port (W_4096^k, 18
+  bits; pass p uses every 4096/2^p th).
+* **Block floating point per bin**: 18-bit words can't hold both a
+  carrier's growth (n) and the noise's (√n) with a fixed scaling. Each
+  pass halves its outputs (rounded) if the data before it reached 2^15,
+  quarters them if 2^16, from a magnitude tracker over the pass before
+  (the first pass: over the job's capture); the bin's exponent e counts
+  the halvings. A bin of noise is never scaled; a carrier costs only its
+  own bin precision.
+
+**Output.** For each bin, lowest first, points j = −n/4 .. n/4 − 1 (the
+middle 30 kHz, ascending): re² + im² (two DSP), as a float32 with 2 · (e
++ shift) added to its exponent, mantissa truncated (as the power line's
+`power_f32`). The server divides by the window's gain. On the power
+ring in the power line's framing: chunks of a header `{0x5042, 3,
+chunk[3:0], 2'd0, tag[5:0], number}` and up to 64 words `{f32[2i + 1],
+f32[2i]}`, number = `{saturated, 11'd0, chunks − 1 [3:0], frame[15:0]}`
+(the capture's first frame). At most 16 chunks a job. A chunk starts
+only while the power line isn't sending and the ring writer's FIFO has
+room for it (the results wait in the work RAM), so the power line's
+timing is untouched.
+
+**Cost (estimate)**: 4.5 BRAM36 (to 59 of 60; the FFT's 254-word delay
+line back in LUT RAM would return one), 6 DSP (to 71), about 1200 LUTs
+(to about 72 %). No new AXI master, ring or interrupt.
+
+**Driver and server.**
+
+* Driver: one ioctl, `ZSDR_PFB_ZOOM` (up to 16 job words; returns how
+  many the queue took), and the capability and counters in
+  `zsdr_pfb_info`/`zsdr_pfb_status` (both carry their size). The power
+  stream's read is unchanged: type 3 chunks come with the lines.
+* web888d: the power ring's parser hands type 3 chunks on by tag. A
+  zoomed view becomes jobs instead of bursts: per line, A jobs spread
+  over the line's period (two jobs each for views above 4096 samples
+  or 256 bins),
+  A from a budget shared by all views (the work RAM's time: Σ n · jobs/s
+  ≤ about 50 000), then the line rate, as the pool sheds today. The view
+  sums its jobs' spectra, takes dB and rebins, as it does with its own
+  FFTs' output. The iq backend gets the same job interface from its
+  software bank, so the server side is built and tested without the
+  bitstream; bitstreams without the engine keep the bursts.
+
+**Expected gain**: the pool's 7-9 % a view goes down to summing and
+rebinning about 1100 floats a job, and the bins read to 4.4 KB a job;
+both to be measured (step 2 below) before the RTL is written.
+
+**Steps.**
+
+1. `scripts/zoom_model.py`, bit-exact reference (capture, window,
+   passes with their scaling, power): against a float FFT of the same
+   bins for the floor, a carrier's skirt and the saturation rule; this
+   settles the 18-bit words and the scaling thresholds.
+2. Server: the job interface, the iq backend's software engine, views on
+   jobs, the scheduler; the A9's cost per view from a bench.
+3. `rtl/fft/pfb_zoom.v` against the model's vectors (`make sim-zoom`),
+   the power ring's merge, registers; CI for resources and timing.
+4. Driver ioctl, the zynqsdr backend, the unit: the load test of 8 and
+   16 distinct views against server `doc/m6-channelizer.md` §6's table.
+
+**Open.**
+
+* 4096 samples serve 16 distinct 480 kHz views at 1.5 spectra a line. A
+  second work RAM would double that; it doesn't fit beside the tuner
+  today (it would with T = 10 or a narrower power accumulator).
+* Float32 points; 16-bit log points would halve the ring's bytes (only
+  worth it if step 2 shows the read matters).
+* Dragging: a job is 2-34 ms old when it arrives, so a moved view needs
+  no margin bins or held spectra; the server's settle logic can go for
+  job-fed views.
+
 ## 4. Server side
 
 * New backend next to the stock-driver one: the `Radio` trait gains (or
@@ -621,3 +786,4 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   I/Q: cheap, and planned with M6 anyway.
 * Wideband streaming (§3.5): in the channelizer bitstream or its own
   bitstream/firmware mode? First, the A9's sustained UDP send rate.
+* Zoom spectra in the PL (§3.9): designed, not built.
