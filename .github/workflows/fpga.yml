@@ -18,8 +18,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # RTL simulation on GitHub-hosted runners, also for pull requests.
+  # RTL simulation on GitHub-hosted runners: for pull requests (fork code
+  # must not reach the project's runner), and for pushes while there is no
+  # self-hosted runner. Otherwise the bitstreams job simulates first.
   sim:
+    if: github.event_name == 'pull_request' || vars.SELF_HOSTED_RUNNER != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +35,6 @@ jobs:
   # SELF_HOSTED_RUNNER is "true".
   bitstreams:
     if: github.event_name != 'pull_request' && vars.SELF_HOSTED_RUNNER == 'true'
-    needs: sim
     runs-on: [self-hosted, linux, vivado]
     timeout-minutes: 240
     env:
@@ -41,6 +43,10 @@ jobs:
       LD_PRELOAD: /lib/x86_64-linux-gnu/libudev.so.1
     steps:
       - uses: actions/checkout@v4
+      - name: simulate
+        # Icarus Verilog and numpy are in the runner image (web888-ng-os
+        # ci/runner/Containerfile)
+        run: make -C fpga sim PYTHON=python3
       - name: licence
         # warns 30 days ahead (exit 2), fails if expired or missing (1)
         run: fpga/scripts/licence-check.sh > licence.txt || [ $? -eq 2 ]
