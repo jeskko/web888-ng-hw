@@ -482,6 +482,18 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   instead of `rst`'s fan-out. WNS +0.058 ns with the guardband (the ADC
   input pins, as in the stock HF build; the worst internal path +0.065
   ns, in the tuner); LUT 83.8 %, BRAM 56.5 of 60. Not yet on the unit.
+* **Memories back in block RAM** (hw ae7a7a5, CI 43018104116,
+  2026-11-11): the split stage's double buffer was built twice (one
+  array read on two ports and written on a third: 12 BRAM36); as two
+  memories, the one not being written read on both ports, it is 6. The
+  split's twiddles and the FFT's first table are quarter waves (1 and
+  0.5 BRAM36, the latter out of LUT logic). The room went to what
+  synthesis had built from LUTs: the FIR's coefficient ROMs 0 and 1 and
+  the FFT's 510- and 254-word delay lines (the 512-word pin missed them:
+  the butterfly passes D - 2). **LUT 83.8 % -> 64.7 %** (14 748 ->
+  11 386), BRAM 55.5 of 60, DSP 65; WNS +0.058 ns with the guardband
+  (the ADC input pins, as before); bit-exact as before (`make sim`).
+  Not yet on the unit.
 * **On the unit** (2026-10-29, `private/tune-test-kit`): 32 users at
   12 kS/s, FT8 decodes, 20 mixed-view web sessions + 2 skimmers clean
   (server `doc/m6-channelizer.md` §6). A ring restart mid-pass first

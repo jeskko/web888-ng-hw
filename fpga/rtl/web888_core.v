@@ -637,8 +637,9 @@ module web888_core #(
     .cfg_we(tn_we), .cfg_idx(ev_idx[5:0]), .cfg_data(ev_data),
     .run(rx_run), .m_data(tn_d), .m_valid(tn_v), .m_frame());
 
-  // a small FIFO (LUT RAM): 12 kS/s frames, and block RAM is all taken
-  axi_ring_writer #(.FIFO_AW(6), .FRAME(TUNE)) tune_dma (
+  // a small FIFO, pinned to LUT RAM (12 kS/s frames; left to synthesis,
+  // its 64 words took a whole block RAM)
+  axi_ring_writer #(.FIFO_AW(6), .FRAME(TUNE), .FIFO_STYLE("distributed")) tune_dma (
     .clk(clk), .rst(rst), .enable(rx_en), .base_addr(rx_addr), .len_m1(rx_len),
     .oneshot(16'd0), .running(rx_run), .ptr(rx_ptr), .burst_done(rx_done),
     .overflow(rx_ovf), .frames(rx_frames), .drops(rx_drops), .bursts(rx_bursts),

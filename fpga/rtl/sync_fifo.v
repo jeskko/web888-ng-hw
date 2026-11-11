@@ -9,7 +9,7 @@
 module sync_fifo #(
   parameter integer W  = 64,
   parameter integer AW = 9,
-  parameter         STYLE = "auto"    // "block": pinned to block RAM
+  parameter         STYLE = "auto"    // "block", "distributed": pinned
 ) (
   input  wire          clk,
   input  wire          rst,
@@ -37,6 +37,14 @@ module sync_fifo #(
   generate
     if (STYLE == "block") begin : g_block
       (* ram_style = "block" *) reg [W-1:0] mem [0:(1<<AW)-1];
+      always @(posedge clk) begin
+        if (wvalid && !full)
+          mem[wptr[AW-1:0]] <= wdata;
+        if (pop)
+          rdata <= mem[rptr[AW-1:0]];
+      end
+    end else if (STYLE == "distributed") begin : g_dist
+      (* ram_style = "distributed" *) reg [W-1:0] mem [0:(1<<AW)-1];
       always @(posedge clk) begin
         if (wvalid && !full)
           mem[wptr[AW-1:0]] <= wdata;
