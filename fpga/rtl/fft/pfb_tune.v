@@ -46,7 +46,7 @@ module pfb_tune #(
 );
 
   localparam integer UW = $clog2(NU);
-  localparam integer LS = 8;                    // sincos32 latency
+  localparam integer LS = 9;                    // the phase register, sincos32's 8
 
   // ---------------------------------------------------------------- tuning
   reg [31:0] lo [0:NU-1];
@@ -163,9 +163,20 @@ module pfb_tune #(
   // ---------------------------------------------------------------- mixer
   reg [31:0] p_r [0:NU-1];
   initial for (i = 0; i < NU; i = i + 1) p_r[i] = 32'd0;
-  wire [31:0] pp = prst[iss_u] ? 32'd0 : p_r[iss_u];
-  always @(posedge clk)
-    if (iss_v) p_r[iss_u] <= en_r[iss_u] ? pp + pinc_r[iss_u] : pp;
+  // the user's phase and step read in one clock, the phase stepped and
+  // written back in the next (a user comes once a frame, so never in
+  // both): the read, the restart's mux and the 32-bit add in one clock
+  // were the build's critical path
+  reg          ph_v = 1'b0;
+  reg [UW-1:0] ph_u = 0;
+  reg [31:0]   pp = 32'd0, ph_inc = 32'd0;
+  always @(posedge clk) begin
+    ph_v   <= iss_v;
+    ph_u   <= iss_u;
+    pp     <= prst[iss_u] ? 32'd0 : p_r[iss_u];
+    ph_inc <= en_r[iss_u] ? pinc_r[iss_u] : 32'd0;
+    if (ph_v) p_r[ph_u] <= pp + ph_inc;
+  end
 
   // enables and phase restarts: a commit wins over the mixer's clear
   always @(posedge clk) begin
