@@ -495,7 +495,9 @@ gets the audio rate (32 users: 3 MB/s) instead of the bins.
   (hw a6e1f68, CI 43023497505). **LUT 83.8 % -> 65.4 %** (14 748 ->
   11 515), **BRAM 54.5 of 60**, DSP 65; WNS +0.058 ns with the guardband
   (the ADC input pins, as before); bit-exact as before (`make sim`).
-  Not yet on the unit.
+  **On the unit** since 2026-11-11 (web888d v0.8.0): signature
+  0x0e5d2010, RX 12 020 frames/s, FT8 decodes on eight bands at the rate
+  of the build before, 8 web sessions with distinct zoomed views clean.
 * **On the unit** (2026-10-29, `private/tune-test-kit`): 32 users at
   12 kS/s, FT8 decodes, 20 mixed-view web sessions + 2 skimmers clean
   (server `doc/m6-channelizer.md` §6). A ring restart mid-pass first
