@@ -18,12 +18,14 @@
 #
 # Each root slot gets the emulator's DT changes (scripts/emu-dtb.sh). The
 # checks log in over SSH with a key made here. Ports: SSH 22322, web 28173.
-# CHANNELIZER=1: web888.txt sets bitstream = channelizer in boot 1;
-# web888d gets websdr_pfb.bit. The emulated PL is the standard one
-# whatever is loaded, so bins mode isn't tested.
+# web888.txt without a bitstream line: the channelizer (the default since
+# web888-ng-os v0.7.0), web888d gets websdr_pfb.bit; CHANNELIZER=1 sets
+# the line too; STANDARD=1 sets bitstream = standard (web888d's own
+# choice). The emulated PL is the standard one whatever is loaded, so
+# bins mode isn't tested.
 set -euo pipefail
 EMU=$(cd "$(dirname "$0")/.." && pwd)
-[ $# -ge 1 ] || { sed -n '4,18p' "$0" >&2; exit 2; }
+[ $# -ge 1 ] || { sed -n '4,25p' "$0" >&2; exit 2; }
 IMAGE=$1
 W=${2:-$EMU/build/sd-image-test}
 SSH_PORT=22322 WEB_PORT=28173
@@ -110,6 +112,7 @@ fat() { mcopy -i "$FAT" "::$1" - 2> /dev/null | tr -d '\r'; }
 echo "== 1. first boot"
 bitline=
 [ "${CHANNELIZER:-0}" = 1 ] && bitline="bitstream = channelizer"
+[ "${STANDARD:-0}" = 1 ] && bitline="bitstream = standard"
 txt "hostname = emu888" "admin_password = test-password-1" \
 	"ssh_key = $(cat "$W/key.pub")" ${bitline:+"$bitline"}
 boot 'login:' 900 || bad "no login prompt"
@@ -130,7 +133,7 @@ check "eth0 (not renamed)" on 'test -e /sys/class/net/eth0'
 check "web888-setup ran" on 'systemctl is-active web888-setup'
 check "hostname from web888.txt" on 'test "$(hostname)" = emu888'
 check "web888d running" on 'systemctl is-active web888d'
-if [ "${CHANNELIZER:-0}" = 1 ]; then
+if [ "${STANDARD:-0}" != 1 ]; then
 	check "web888d loads the channelizer" on 'tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q "bitstream /usr/share/web888/websdr_pfb.bit"'
 else
 	check "web888d's own bitstream choice" on '! tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q websdr_pfb'
