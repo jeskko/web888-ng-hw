@@ -5,7 +5,8 @@
 # (a push to main starts one by itself), wait, download the results.
 #
 #   scripts/ci-build.sh      (or: make ci)
-#   -> build/ci/websdr_{hf,vhf}.bit, timing_*.txt, utilization_*.txt, SHA256SUMS
+#   -> build/ci/websdr_pfb{,_vhf}.bit, timing_*.txt, utilization_*.txt, SHA256SUMS
+#   (the HF/VHF bitstreams are frozen: CI no longer builds them)
 #
 # Needs gh (logged in) and push access. CI builds the pushed commit, so
 # commit first.

@@ -45,17 +45,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: simulate
         # Icarus Verilog and numpy are in the runner image (web888-ng-os
-        # ci/runner/Containerfile)
+        # ci/runner/Containerfile); the frozen HF/VHF designs too (they
+        # share the NCO, the register file and the ring writer)
         run: make -C fpga sim PYTHON=python3
       - name: licence
         # warns 30 days ahead (exit 2), fails if expired or missing (1)
         run: fpga/scripts/licence-check.sh > licence.txt || [ $? -eq 2 ]
       - name: build
-        run: make -C fpga hf vhf VIVADO="$VIVADO" JOBS=8
+        # the channelizers, HF and VHF (docs/channelizer.md). The
+        # stock-compatible websdr_hf.bit / websdr_vhf.bit are frozen at
+        # v0.5.0 (fpga/README.md): `make hf vhf` by hand if ever needed.
+        run: make -C fpga pfb pfb_vhf VIVADO="$VIVADO" JOBS=8
       - name: timing
         # build.tcl only warns; a release must meet timing (with guardband)
         run: |
-          for v in hf vhf; do
+          for v in pfb pfb_vhf; do
             wns=$(sed -n 's/^WNS: \([-0-9.]*\) ns.*/\1/p' fpga/build/$v.log | tail -n 1)
             echo "$v: WNS $wns ns" | tee -a "$GITHUB_STEP_SUMMARY" wns.txt
             awk -v w="$wns" 'BEGIN { exit !(w != "" && w + 0 >= 0) }' ||
@@ -65,45 +69,21 @@ jobs:
         run: |
           mkdir out
           cp wns.txt licence.txt out/
-          for v in hf vhf; do
+          for v in pfb pfb_vhf; do
             cp fpga/build/$v/websdr_$v.bit out/
             cp fpga/build/$v/timing.txt out/timing_$v.txt
             cp fpga/build/$v/utilization.txt out/utilization_$v.txt
           done
-          # PS7 init (the same PS configuration in both)
-          mkdir out/ps7_init && cp fpga/build/hf/ps7_init* out/ps7_init/
+          # PS7 init (the same PS configuration in every build)
+          mkdir out/ps7_init && cp fpga/build/pfb/ps7_init* out/ps7_init/
           cd out && sha256sum websdr_*.bit > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: bitstreams
           path: out/
           if-no-files-found: error
-      - name: channelizer bitstreams
-        # web888_core PFB = 1 (docs/channelizer.md), for the HF clock (pfb)
-        # and the VHF one (pfb_vhf); reported on main, and on tags
-        # released, so then they must build and meet timing
-        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: |
-          mkdir pfb
-          for v in pfb pfb_vhf; do
-            make -C fpga $v VIVADO="$VIVADO" JOBS=8
-            wns=$(sed -n 's/^WNS: \([-0-9.]*\) ns.*/\1/p' fpga/build/$v.log | tail -n 1)
-            echo "$v: WNS $wns ns" | tee -a "$GITHUB_STEP_SUMMARY" pfb/wns.txt
-            awk -v w="$wns" 'BEGIN { exit !(w != "" && w + 0 >= 0) }' ||
-              { echo "::error::$v: timing not met (WNS '$wns')"; exit 1; }
-            cp fpga/build/$v/websdr_$v.bit pfb/
-            cp fpga/build/$v/timing.txt pfb/timing_$v.txt
-            cp fpga/build/$v/timing_paths.txt pfb/timing_paths_$v.txt
-            cp fpga/build/$v/utilization.txt pfb/utilization_$v.txt
-          done
-          cd pfb && sha256sum websdr_pfb*.bit > SHA256SUMS
-      - uses: actions/upload-artifact@v4
-        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        with:
-          name: channelizer
-          path: pfb/
       # synthesis utilisation (per module), also when implementation
-      # failed, and the timing and utilisation reports when timing wasn't met
+      # failed, and the timing reports (paths too) when timing wasn't met
       - uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true
@@ -131,31 +111,22 @@ jobs:
         with:
           name: bitstreams
           path: out
-      - uses: actions/download-artifact@v4
-        with:
-          name: channelizer
-          path: pfb
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp pfb/websdr_pfb*.bit out/
-          cp pfb/timing_pfb*.txt pfb/utilization_pfb*.txt out/
-          rm -f out/timing_paths_*
-          cat pfb/SHA256SUMS >> out/SHA256SUMS
-          sed 's/^/channelizer /' pfb/wns.txt >> out/wns.txt
           # release assets are files: the PS7 init (U-Boot SPL) as one
           tar -C out -czf out/ps7_init.tar.gz ps7_init && rm -rf out/ps7_init
           pre=
           case "$GITHUB_REF_NAME" in v0.*) pre=--prerelease ;; esac
           {
-            echo "Open Web-888 FPGA bitstreams for the stock-compatible register map, built by CI (Vivado 2026.1) from this tag."
+            echo "Open Web-888 FPGA bitstreams, built by CI (Vivado 2026.1) from this tag."
             echo
-            echo "* \`websdr_hf.bit\`: HF, 12 RX + 2 WF (signature \`0x0E5D020C\`)"
-            echo "* \`websdr_vhf.bit\`: VHF, 13 RX + 2 WF (signature \`0x0E5D020D\`)"
             echo "* \`websdr_pfb.bit\`: the channelizer, HF in 30 kHz bins + a tuner for 32 users (signature \`0x0E5D2010\`; its own register map, \`docs/channelizer.md\`)"
             echo "* \`websdr_pfb_vhf.bit\`: the channelizer for a 98.304 MHz ADC clock: VHF 98.3-147.5 MHz (undersampled) in 24 kHz bins + a tuner for 32 users (signature \`0x0E5D2110\`)"
             echo "* \`ps7_init.tar.gz\`: the PS7 initialisation (DDR, MIO, clocks) for a first-stage loader"
             echo "* \`SHA256SUMS\`, timing and utilization reports"
+            echo
+            echo "The stock-compatible \`websdr_hf.bit\` / \`websdr_vhf.bit\` are frozen: the last builds are in release v0.5.0, the hardware-tested HF one in v0.2.0."
             echo
             sed 's/^/Timing (with guardband): /' out/wns.txt
             # what's new and how it was tested, if written down for this tag

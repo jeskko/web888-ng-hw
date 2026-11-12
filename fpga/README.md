@@ -10,8 +10,12 @@ the server. The contract was recovered from the open server code and the
 driver (see `../docs/`), and is documented in `doc/register-map.md`.
 
 **Status:** HF and VHF from release v0.2.0 (2026-10-28); v0.3.0 added
-the channelizer, v0.4.0 its zoom engine, and their HF/VHF rebuilds (shared code changed) haven't
-run on hardware yet. The HF bitstream runs on a
+the channelizer, v0.4.0 its zoom engine, v0.5.0 its VHF build.
+**The stock-compatible HF and VHF bitstreams are frozen at v0.5.0**
+(2026-11-12): CI builds only the channelizers from then on, and
+web888-ng-os runs the channelizer by default. Their sources stay and
+still simulate (`make sim`); `make hf vhf` builds them by hand. The
+rebuilds after v0.2.0 (shared code changed) haven't run on hardware. The HF bitstream runs on a
 stock Web-888 with the stock driver (`../docs/hardware-test-plan.md`):
 48 k frames/s, web888d with web users and FT8/FT4/WSPR skimmers for an
 hour. The VHF bitstream is simulated and timing-clean, not yet run on
@@ -90,8 +94,8 @@ v0.2.0). Vendor design: 84 % LUT, 72 % FF, 75 % DSP, 55 % BRAM.
 
 ```sh
 make sim          # Icarus Verilog (PATH or local.mk) + numpy analysis
-make hf vhf       # Vivado (PATH or local.mk; see doc/vivado-notes.md)
-make ci           # both bitstreams on the project's CI runner -> build/ci/
+make hf vhf       # the frozen stock-compatible ones (Vivado; doc/vivado-notes.md)
+make ci           # the channelizers on the project's CI runner -> build/ci/
 make pfb pfb_vhf  # the channelizer bitstreams, HF and VHF (Vivado)
 make pfb-ooc      # the channelizer datapath alone, out of context (Vivado)
 ```
