@@ -26,8 +26,8 @@ on the project's unit since 2026-10-29. v0.4.0 adds its zoom engine
 (power spectra of runs of bins for zoomed waterfalls; on the unit since
 2026-11-11). `make pfb_vhf` builds it for the VHF input
 (`websdr_pfb_vhf.bit`: a 98.304 MHz ADC clock, 98.304-147.456 MHz
-undersampled in 24 kHz bins; `../docs/channelizer.md` §3.10; simulated,
-not yet on a board).
+undersampled in 24 kHz bins; `../docs/channelizer.md` §3.10; ran on
+the project's unit 2026-11-12, without a VHF antenna).
 
 ## Architecture
 

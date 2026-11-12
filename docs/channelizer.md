@@ -7,8 +7,8 @@ simulation; timing is met with the guardband. It has run on the
 project's unit since 2026-10-29: web888d in bins mode, 32 tuner channels
 and FT8 skimmers on ten bands. v0.4.0 (2026-11-11) adds the zoom
 engine (§3.9). A VHF build (`websdr_pfb_vhf.bit`, §3.10: 98.304 to
-147.456 MHz by undersampling) is on `main`, simulated, not yet released
-or run on a board. Progress notes: §5. This is the core of
+147.456 MHz by undersampling) is on `main`, not yet released; it ran
+on the project's unit on 2026-11-12 (§3.10). Progress notes: §5. This is the core of
 the open-FPGA milestone (server design §11, M6).
 It drops compatibility with the stock server's FPGA interface. The
 stock bitstream stays usable as a fallback with its own backend.
@@ -696,7 +696,7 @@ both to be measured (step 2 below) before the RTL is written.
   no margin bins or held spectra; the server's settle logic can go for
   job-fed views.
 
-### 3.10 VHF by undersampling (2026-11-12: simulated, CI build pending)
+### 3.10 VHF by undersampling (2026-11-12: built, ran on the unit)
 
 The board's VHF input (the RF switch, `MODE_SET`) feeds the same ADC.
 The stock firmware's airband mode clocks the ADC at 98.304 or 110.592
@@ -731,7 +731,10 @@ with the clock.
   for 110.592 MHz: 8.5 ns against 98.304 MHz's 10.17). The signature's
   [11:8] (no WF channels in this build) is the clock plan: 0 HF, 1 VHF,
   so web888d knows the tuner's rate and refuses a bitstream that doesn't
-  match the clock (signature `0x0E5D2110`). The driver needs no change.
+  match the clock (signature `0x0E5D2110`). The driver needs no change:
+  `RX_START` takes 40 for the tuner at either clock (R2 feeds nothing in
+  this build; the driver accepts only 40 there). CI (hw aab5230): **WNS
+  +0.456 ns** with the guardband, LUT 77.5 %, BRAM 59 of 60, DSP 71.
 * **Simulated**: `make sim-tune` runs the tuner at ÷5 and ÷4, both
   bit-exact to `scripts/tune_model.py`; `make sim-core-pfb` runs the
   whole build both ways through its registers (at 98.304 MHz: the
@@ -741,10 +744,20 @@ with the clock.
   programs the Si5351 to 98.304 MHz before loading, sets the RF switch,
   and maps RF to baseband (RF = fs + baseband) for the tuner's words,
   the bins (`first_hz` = fs) and the tunable range; NBFM for 2 m.
-* **Not known yet**: the VHF input's filter (what else folds in: FM
-  broadcast 88-98.3 MHz would land mirrored on 98.3-108.6 MHz), its
-  gain, and the noise floor there. The stock firmware's airband mode
-  works on the same hardware, so the path itself is used.
+* **On the unit** (2026-11-12, web888d 1abb5f2 `--band vhf`, the VHF
+  connector open, the antenna on HF only): the Si5351 at 98.304 MHz,
+  signature 0x0e5d2110, **RX 12 035 frames/s** (the tuner's 12 kS/s:
+  the clock is right); no overloads or drops. The power line's median
+  -99.8 dB in 48 kHz display bins (HF with its antenna: -91.6 dB in 60
+  kHz), the ADC's DC in the zone's first bin, one spur 3 dB over the
+  floor (125.004 MHz). HF's strongest carriers don't show where they
+  would land (>55 dB: the RF switch is on the VHF path). The zoom
+  engine's 384 kHz view: 375 Hz points at the line's floor scaled.
+  Back to HF by restarting the service: 122.88 MHz again, RX and FT8 as
+  before.
+* **Not known yet**: real VHF signals (no VHF antenna yet); the VHF
+  input's filter (what else folds in: FM broadcast 88-98.3 MHz would
+  land mirrored on 98.3-108.6 MHz), its gain, the noise figure.
 
 ## 4. Server side
 
