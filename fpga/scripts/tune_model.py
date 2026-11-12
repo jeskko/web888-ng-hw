@@ -10,11 +10,14 @@ pinc = (inc - k * 2^36) >> 5 (32-bit). Per frame, the user's bin sample x
   Y = xr*c + xi*s + j(xi*c - xr*s)        (c, s: sincos(p), 18-bit)
   y = sat18((Y + 2^22) >> 23)             (stored, 18 + 18 bits)
 and p += pinc. Disabled users store 0 and keep p. Every frame n with
-n % 5 == 4 gives an output per user from the 128-sample history:
+n % DEC == DEC - 1 gives an output per user from the 128-sample history:
   out = (sum_j h[j] * y[n - j] + 2^6) >> 7  (32-bit, a full-scale sine 2^29)
+DEC is 5 (60 kS/s frames at 122.88 MHz, tune_fir.mem) or 4 (the VHF
+build: 48 kS/s at 98.304 MHz, tune_fir_d4.mem).
 
-  tune_model.py check IN OUT   compare the testbench's dump (sim/out) with
-                               the model; exit 1 on a mismatch
+  tune_model.py check IN OUT [DEC]   compare the testbench's dump
+                                     (sim/out) with the model; exit 1 on
+                                     a mismatch
 """
 import os
 import sys
@@ -31,7 +34,7 @@ def load_mem(name, bits):
 
 
 ROM = load_mem("sincos_qw.mem", 18)  # 17-bit unsigned: never negative
-TAPS = load_mem("tune_fir.mem", 18)
+COEF = {5: "tune_fir.mem", 4: "tune_fir_d4.mem"}
 
 
 def sincos(p):
@@ -64,9 +67,10 @@ def sat18(v):
     return max(-(1 << 17), min((1 << 17) - 1, v))
 
 
-def run(users, frames):
+def run(users, frames, dec=5):
     """users: [(inc, enabled)] * NU; frames: [{bin: (re, im)}] in order.
-    Returns {n: [(i, q)] * NU} for the output frames n % 5 == 4."""
+    Returns {n: [(i, q)] * NU} for the output frames n % dec == dec - 1."""
+    taps = load_mem(COEF[dec], 18)
     cfg = [derive(inc) + (en,) for inc, en in users]
     p = [0] * NU
     hist = [[(0, 0)] * 128 for _ in range(NU)]
@@ -82,17 +86,17 @@ def run(users, frames):
             yi = sat18((xi * c - xr * s + (1 << 22)) >> 23)
             hist[u][n % 128] = (yr, yi)
             p[u] = (p[u] + pinc) & 0xFFFFFFFF
-        if n % 5 == 4:
+        if n % dec == dec - 1:
             row = []
             for u in range(NU):
-                ar = sum(TAPS[j] * hist[u][(n - j) % 128][0] for j in range(len(TAPS)))
-                ai = sum(TAPS[j] * hist[u][(n - j) % 128][1] for j in range(len(TAPS)))
+                ar = sum(taps[j] * hist[u][(n - j) % 128][0] for j in range(len(taps)))
+                ai = sum(taps[j] * hist[u][(n - j) % 128][1] for j in range(len(taps)))
                 row.append(((ar + 64) >> 7, (ai + 64) >> 7))
             out[n] = row
     return out
 
 
-def check(path_in, path_out):
+def check(path_in, path_out, dec=5):
     # IN: "U u inc en" lines, then "F n" and "B k re im" lines per frame
     users = [(0, 0)] * NU
     frames = []
@@ -105,7 +109,7 @@ def check(path_in, path_out):
                 frames.append({})
             elif t[0] == "B":
                 frames[-1][int(t[1])] = (int(t[2]), int(t[3]))
-    want = run(users, frames)
+    want = run(users, frames, dec)
     # OUT: "O n" then NU lines "i q"
     got = {}
     with open(path_out) as f:
@@ -129,12 +133,13 @@ def check(path_in, path_out):
                     print(f"frame {n} user {u}: rtl {g} model {w}")
                 bad += 1
     peak = max((max(abs(i), abs(q)) for row in got.values() for i, q in row), default=0)
-    print(f"tune_model: {len(got)} output frames compared, {bad} mismatches, peak {peak}")
+    print(f"tune_model (DEC {dec}): {len(got)} output frames compared, {bad} mismatches, peak {peak}")
     return bad == 0 and len(got) > 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "check":
-        sys.exit(0 if check(sys.argv[2], sys.argv[3]) else 1)
+    if len(sys.argv) in (4, 5) and sys.argv[1] == "check":
+        dec = int(sys.argv[4]) if len(sys.argv) == 5 else 5
+        sys.exit(0 if check(sys.argv[2], sys.argv[3], dec) else 1)
     print(__doc__)
     sys.exit(2)

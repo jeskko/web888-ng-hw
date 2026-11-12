@@ -24,7 +24,10 @@ band in 30 kHz bins, a power line and a tuner for 32 receivers. It is
 not stock-compatible (web888d's bins mode, the open driver) and has run
 on the project's unit since 2026-10-29. v0.4.0 adds its zoom engine
 (power spectra of runs of bins for zoomed waterfalls; on the unit since
-2026-11-11).
+2026-11-11). `make pfb_vhf` builds it for the VHF input
+(`websdr_pfb_vhf.bit`: a 98.304 MHz ADC clock, 98.304-147.456 MHz
+undersampled in 24 kHz bins; `../docs/channelizer.md` §3.10; simulated,
+not yet on a board).
 
 ## Architecture
 
@@ -89,7 +92,8 @@ v0.2.0). Vendor design: 84 % LUT, 72 % FF, 75 % DSP, 55 % BRAM.
 make sim          # Icarus Verilog (PATH or local.mk) + numpy analysis
 make hf vhf       # Vivado (PATH or local.mk; see doc/vivado-notes.md)
 make ci           # both bitstreams on the project's CI runner -> build/ci/
-make pfb          # the channelizer datapath alone, out of context (Vivado)
+make pfb pfb_vhf  # the channelizer bitstreams, HF and VHF (Vivado)
+make pfb-ooc      # the channelizer datapath alone, out of context (Vivado)
 ```
 
 CI (`.github/workflows/fpga.yml`): simulation on every change under

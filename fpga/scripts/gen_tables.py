@@ -5,6 +5,7 @@
   rtl/gen/sincos_qw.mem   quarter-wave sine table for nco.v
   rtl/gen/rx_gain_rom.v   per-R2 normalisation (shift, gain) for rx_serial_cic.v
   rtl/gen/tune_fir.mem    the bins tuner's decimate-by-5 FIR (pfb_tune.v)
+  rtl/gen/tune_fir_d4.mem its decimate-by-4 FIR (the VHF channelizer build)
 
 Run from the fpga/ directory:  python3 scripts/gen_tables.py
 """
@@ -68,8 +69,9 @@ def gen_rx_gain():
 # ---- bins tuner FIR ------------------------------------------------------------
 # 60 kS/s bin samples -> 12 kS/s: pass 4.8 kHz, stop 7.2 kHz (what lies
 # between 6 and 7.2 kHz folds above 4.8), Kaiser; DC gain 2^18, 18-bit taps.
+# The VHF channelizer build (98.304 MHz ADC clock): 48 kS/s -> 12 kS/s, the
+# same edges (the wider relative transition gives more stopband).
 TUNE_TAPS = 120
-TUNE_FS = 60e3
 TUNE_PASS = 4.8e3
 TUNE_STOP = 7.2e3
 TUNE_GAIN_LOG2 = 18
@@ -84,12 +86,12 @@ def bessel_i0(x):
     return s
 
 
-def tune_taps():
+def tune_taps(fs):
     n = TUNE_TAPS
-    tw = (TUNE_STOP - TUNE_PASS) / TUNE_FS
+    tw = (TUNE_STOP - TUNE_PASS) / fs
     atten = 14.36 * tw * (n - 1) + 7.95
     beta = 0.1102 * (atten - 8.7)
-    fc = (TUNE_PASS + TUNE_STOP) / 2 / TUNE_FS
+    fc = (TUNE_PASS + TUNE_STOP) / 2 / fs
     m = (n - 1) / 2
     h = []
     for i in range(n):
@@ -116,10 +118,11 @@ def gen_zoom_win():
 
 
 def gen_tune_fir():
-    q, atten = tune_taps()
-    with open(os.path.join(OUT, "tune_fir.mem"), "w") as f:
-        f.write("\n".join(f"{v & 0x3ffff:05x}" for v in q) + "\n")
-    print(f"tune_fir.mem: {len(q)} taps, ~{atten:.0f} dB, sum {sum(q)}", file=sys.stderr)
+    for name, fs in (("tune_fir.mem", 60e3), ("tune_fir_d4.mem", 48e3)):
+        q, atten = tune_taps(fs)
+        with open(os.path.join(OUT, name), "w") as f:
+            f.write("\n".join(f"{v & 0x3ffff:05x}" for v in q) + "\n")
+        print(f"{name}: {len(q)} taps, ~{atten:.0f} dB, sum {sum(q)}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,12 @@
 // the bins, frequencies through EV words 64 + 2u (low) and 65 + 2u
 // ({enable, high 16 bits}), its ring through the stock RX registers and
 // status on m_axi_wf1 (HP2), its interrupt in RX's place (irq 2).
+//
+// PFB_VHF = 1: the channelizer for the VHF clock, 98.304 MHz (the stock
+// airband profile 0; undersampled, 98.304..147.456 MHz in the third
+// Nyquist zone): 24 kHz bins at 48 kS/s, the tuner decimating by 4 to
+// 12 kS/s (TUNE_COEF_FILE then tune_fir_d4.mem); the signature's [11:8]
+// is 1.
 
 module web888_core #(
   parameter integer NRX             = 12,      // hf build 12, vhf build 13 (as stock); max 13 (CFG slots)
@@ -33,6 +39,7 @@ module web888_core #(
   parameter         ROM_FILE        = "sincos_qw.mem",
   parameter integer PFB             = 0,         // 1: the channelizer build
   parameter integer TUNE            = 32,        // PFB: the bins tuner's users (0: none)
+  parameter integer PFB_VHF         = 0,         // PFB: 1 for the VHF clock (above)
   // the channelizer's ROM tables (rtl/gen; Vivado finds them by name, a
   // simulation passes paths)
   parameter         TUNE_COEF_FILE  = "tune_fir.mem",
@@ -642,7 +649,8 @@ module web888_core #(
   wire        tn_we = ev_valid && ev_idx >= 10'd64 && ev_idx < 10'd64 + 2 * TUNE;
   wire [63:0] tn_d;
   wire        tn_v;
-  pfb_tune #(.NU(TUNE), .COEF_FILE(TUNE_COEF_FILE), .ROM_FILE(ROM_FILE)) tuner (
+  pfb_tune #(.NU(TUNE), .DEC(PFB_VHF ? 4 : 5), .COEF_FILE(TUNE_COEF_FILE),
+             .ROM_FILE(ROM_FILE)) tuner (
     .clk(clk), .in_re(ch_re), .in_im(ch_im), .in_k(ch_k), .in_valid(ch_valid),
     .cfg_we(tn_we), .cfg_idx(ev_idx[5:0]), .cfg_data(ev_data),
     .run(rx_run), .m_data(tn_d), .m_valid(tn_v), .m_frame());
@@ -770,9 +778,10 @@ module web888_core #(
   // ---------------------------------------------------------------- status
   // [3:0] RX channels, [7:4] 1 = channelizer, [11:8] WF channels; the
   // channelizer build's RX channels are the tuner's users, their high bits
-  // in [15:12]
+  // in [15:12], and its [11:8] (no WF channels) the clock plan: 0 HF
+  // (122.88 MHz, the tuner / 5), 1 VHF (98.304 MHz, / 4)
   localparam [7:0] NRX8 = PFB ? TUNE : NRX;
-  localparam [3:0] NWF4 = PFB ? 0 : 2;
+  localparam [3:0] NWF4 = PFB ? (PFB_VHF ? 1 : 0) : 2;
   localparam [3:0] PFB4 = PFB ? 1 : 0;
   wire [31:0] signature = {16'h0E5D, NRX8[7:4], NWF4, PFB4, NRX8[3:0]};
   wire [31:0] flags = {unlock_count, 3'd0, wf1_run, wf0_run, rx_run, dna_valid,

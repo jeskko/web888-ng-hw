@@ -5,6 +5,7 @@
 #   make hf / vhf    build bitstreams with Vivado (PATH or local.mk)
 #   make ci          build both on the project's CI runner (scripts/ci-build.sh)
 #   make pfb         the channelizer bitstream (web888_core PFB = 1)
+#   make pfb_vhf     the channelizer for the VHF clock, 98.304 MHz (PFB_VHF = 1)
 #   make pfb-ooc     the channelizer with its outputs alone, out of context
 
 # Host-specific tool paths go in local.mk (not versioned), e.g.
@@ -19,10 +20,10 @@ PYTHON   ?= python3 -I
 JOBS     ?= 8
 
 RTL    := $(wildcard rtl/*.v) rtl/gen/rx_gain_rom.v
-TABLES := rtl/gen/sincos_qw.mem rtl/gen/rx_gain_rom.v rtl/gen/tune_fir.mem rtl/gen/zoom_win.mem
+TABLES := rtl/gen/sincos_qw.mem rtl/gen/rx_gain_rom.v rtl/gen/tune_fir.mem rtl/gen/tune_fir_d4.mem rtl/gen/zoom_win.mem
 SIMLIB := sim/models/unisim_models.v sim/axi_mem_slave.v
 
-.PHONY: all tables sim sim-nco sim-core sim-core-pfb sim-tune sim-fft sim-split sim-fir sim-chain sim-zoom pfb pfb-ooc hf vhf ci clean
+.PHONY: all tables sim sim-nco sim-core sim-core-pfb sim-tune sim-fft sim-split sim-fir sim-chain sim-zoom pfb pfb_vhf pfb-ooc hf vhf ci clean
 
 all: sim
 
@@ -74,12 +75,17 @@ sim-top: | sim/out
 	grep -q "tb_top: PASSED" sim/out/tb_top.log
 	$(PYTHON) scripts/zoom_model.py check sim/out/top_zoom_in.txt sim/out/top_zoom_out.txt
 
-# the bins tuner alone, bit-exact against scripts/tune_model.py
+# the bins tuner alone, bit-exact against scripts/tune_model.py: the HF
+# build's (decimating by 5) and the VHF build's (by 4)
 sim-tune: $(TABLES) | sim/out
 	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_tune.vvp sim/tb_tune.v rtl/fft/pfb_tune.v rtl/fft/sincos32.v
 	cd sim && $(VVP) -n out/tb_tune.vvp | tee out/tb_tune.log
 	grep -q "tb_tune: PASSED" sim/out/tb_tune.log
 	$(PYTHON) scripts/tune_model.py check sim/out/tune_in.txt sim/out/tune_out.txt
+	$(IVERILOG) -g2012 -Wall -I rtl -P tb_tune.DEC=4 -P 'tb_tune.COEF="../rtl/gen/tune_fir_d4.mem"' -o sim/out/tb_tune_d4.vvp sim/tb_tune.v rtl/fft/pfb_tune.v rtl/fft/sincos32.v
+	cd sim && $(VVP) -n out/tb_tune_d4.vvp | tee out/tb_tune_d4.log
+	grep -q "tb_tune: PASSED" sim/out/tb_tune_d4.log
+	$(PYTHON) scripts/tune_model.py check sim/out/tune_in_d4.txt sim/out/tune_out_d4.txt 4
 
 # the zoom engine alone, bit-exact against scripts/zoom_model.py
 sim-zoom: $(TABLES) | sim/out
@@ -93,6 +99,11 @@ sim-core-pfb: $(TABLES) | sim/out
 	  $(PFB_RTL) rtl/fft/pfb_select.v rtl/fft/pfb_power.v rtl/fft/pfb_zoom.v rtl/fft/pfb_top.v rtl/fft/pfb_tune.v rtl/fft/sincos32.v
 	cd sim && $(VVP) -n out/tb_core_pfb.vvp | tee out/tb_core_pfb.log
 	grep -q "tb_core_pfb: PASSED" sim/out/tb_core_pfb.log
+	$(IVERILOG) -g2012 -Wall -I rtl -P tb_core_pfb.VHF=1 -P 'tb_core_pfb.TCOEF="../rtl/gen/tune_fir_d4.mem"' \
+	  -o sim/out/tb_core_pfb_vhf.vvp sim/tb_core_pfb.v $(SIMLIB) $(RTL) \
+	  $(PFB_RTL) rtl/fft/pfb_select.v rtl/fft/pfb_power.v rtl/fft/pfb_zoom.v rtl/fft/pfb_top.v rtl/fft/pfb_tune.v rtl/fft/sincos32.v
+	cd sim && $(VVP) -n out/tb_core_pfb_vhf.vvp | tee out/tb_core_pfb_vhf.log
+	grep -q "tb_core_pfb: PASSED" sim/out/tb_core_pfb_vhf.log
 
 sim-core: $(TABLES) | sim/out
 	$(IVERILOG) -g2012 -Wall -I rtl -o sim/out/tb_core.vvp sim/tb_core.v $(SIMLIB) $(RTL)
@@ -108,7 +119,7 @@ pfb-ooc:
 	mkdir -p build
 	$(VIVADO) -mode batch -nojournal -log build/pfb-ooc.log -source vivado/synth_pfb.tcl -tclargs $(JOBS)
 
-hf vhf pfb: $(TABLES)
+hf vhf pfb pfb_vhf: $(TABLES)
 	mkdir -p build
 	$(VIVADO) -mode batch -nojournal -log build/$@.log -source vivado/build.tcl -tclargs $@ $(JOBS)
 

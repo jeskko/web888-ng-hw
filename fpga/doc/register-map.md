@@ -39,7 +39,7 @@ any outstanding bursts drain), latching address/length/mode at that moment.
 
 | offset | width | field |
 |---|---|---|
-| 0x00 | u32 | signature: [3:0] RX channels (hf build 12, vhf build 13, as stock; `NRX` ≤ 13), [7:4] 1 = the channelizer build (below; then 0 WF and its RX channels are the bins tuner's users, their bits [7:4] in [15:12]: 0x0E5D2010 with 32, 0x0E5D0010 without a tuner), [11:8] WF channels (2), [31:16] 0x0E5D = open design |
+| 0x00 | u32 | signature: [3:0] RX channels (hf build 12, vhf build 13, as stock; `NRX` ≤ 13), [7:4] 1 = the channelizer build (below; then 0 WF and its RX channels are the bins tuner's users, their bits [7:4] in [15:12]: 0x0E5D2010 with 32, 0x0E5D0010 without a tuner), [11:8] WF channels (2; in the channelizer build the clock plan: 0 HF at 122.88 MHz, 1 VHF at 98.304 MHz, `pfb_vhf`: 0x0E5D2110), [31:16] 0x0E5D = open design |
 | 0x04 | u16 | RX ring write pointer (completed bursts) |
 | 0x06 | u16 | WF0 ring write pointer |
 | 0x08 | u16 | WF1 ring write pointer |

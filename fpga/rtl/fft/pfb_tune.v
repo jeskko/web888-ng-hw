@@ -3,7 +3,8 @@
 `default_nettype none
 
 // The bins tuner (hw/docs/channelizer.md §3.8): NU receivers at 12 kS/s
-// from the channelizer's bins, each a frequency, all time-shared on one
+// (the frame rate / DEC: 60 kS/s / 5 at the HF clock of 122.88 MHz,
+// 48 kS/s / 4 at the VHF build's 98.304 MHz) from the channelizer's bins, each a frequency, all time-shared on one
 // datapath. scripts/tune_model.py is the bit-exact model.
 //
 // * Tuning: user u's 48-bit frequency word (f / fs * 2^48, the stock RX
@@ -17,15 +18,17 @@
 // * Mixer (per frame, a user per clock): x * e^-jp (sincos32), rounded to
 //   18 bits (saturating at -6 dBFS), into the user's 128-sample history
 //   (block RAM, {user, frame mod 128}); p += pinc. Disabled users store 0.
-// * Decimator (after every 5th frame's mixer pass): per user, 120 taps
-//   (tune_fir.mem, DC gain 2^18) over the history, one tap a clock on two
-//   multipliers; out = (acc + 2^6) >> 7: a full-scale sine reads 2^29, as
+// * Decimator (after every DEC-th frame's mixer pass): per user, 120 taps
+//   (tune_fir.mem for DEC 5, tune_fir_d4.mem for 4; DC gain 2^18) over
+//   the history, one tap a clock on two multipliers (3840 clocks for 32
+//   users, of the 2048 * DEC between passes); out = (acc + 2^6) >> 7: a full-scale sine reads 2^29, as
 //   RX samples. The words {Q, I} go out in user order, a frame of NU, if
 //   `run` was set when the pass began (whole frames for the ring writer).
 
 module pfb_tune #(
   parameter integer NU        = 32,
   parameter integer T         = 120,
+  parameter integer DEC       = 5,     // frames per output (2..8)
   parameter         COEF_FILE = "tune_fir.mem",
   parameter         ROM_FILE  = "sincos_qw.mem"
 ) (
@@ -254,7 +257,7 @@ module pfb_tune #(
     .clk(clk), .we(q_v), .waddr(q_a), .wdata(q_d), .raddr(h_raddr), .rdata(h_rd));
 
   // a frame is done when its end marker leaves the mixer (after all its
-  // users' writes): its number, slot and place among five
+  // users' writes): its number, slot and place among DEC
   reg        a_done = 1'b0;
   reg [6:0]  a_slot = 7'd0;
   reg [2:0]  a_m5 = 3'd0, m5 = 3'd0;
@@ -265,7 +268,7 @@ module pfb_tune #(
       a_slot <= m2_s;
       a_m5   <= m5;
       a_n    <= nfr;
-      m5     <= m5 == 3'd4 ? 3'd0 : m5 + 3'd1;
+      m5     <= m5 == DEC - 1 ? 3'd0 : m5 + 3'd1;
       nfr    <= nfr + 32'd1;
     end
   end
@@ -285,7 +288,7 @@ module pfb_tune #(
   // ring has no headers to realign on)
   always @(posedge clk) begin
     if (!run) b_emit <= 1'b0;
-    if (a_done && a_m5 == 3'd4 && !b_busy) begin
+    if (a_done && a_m5 == DEC - 1 && !b_busy) begin
       b_busy  <= 1'b1;
       b_u     <= 0;
       b_j     <= 7'd0;
@@ -335,7 +338,7 @@ module pfb_tune #(
   wire signed [47:0] o_r = (acc_r + 48'sd64) >>> 7;
   wire signed [47:0] o_i = (acc_i + 48'sd64) >>> 7;
   always @(posedge clk) begin
-    // b_emit holds for the whole pass (the next starts 5 frames later)
+    // b_emit holds for the whole pass (the next starts DEC frames later)
     m_valid <= e_v && b_emit;
     m_data  <= {o_i[31:0], o_r[31:0]};
   end

@@ -9,11 +9,23 @@
 // pass: that pass must not come out. A `run` dropout in the middle of a
 // pass (a ring restart) must cut no frame: output comes in whole frames.
 
+// DEC = 4 (iverilog -P tb_tune.DEC=4 -P tb_tune.COEF=...d4.mem): the VHF
+// build's tuner, 48 kS/s frames at 98.304 MHz, its own FIR;
+// out/tune_*_d4.txt.
+
 module tb_tune;
 
+  parameter integer DEC = 5;
+  parameter         COEF = "../rtl/gen/tune_fir.mem";
   localparam integer NU = 32;
   localparam integer FRAMES = 300;
+  // the words as at 122.88 MHz for both: the tuner sees only words, so
+  // the same bins and offsets from the bin centre (in bin units) are
+  // covered
   localparam real    FS = 122.88e6;
+  // a ring restart while a pass is emitting: the pass after frame
+  // RS - 1 (n % DEC == DEC - 1)
+  localparam integer RS = DEC == 4 ? 156 : 155;
 
   reg clk = 0;
   always #4 clk = ~clk;
@@ -29,7 +41,8 @@ module tb_tune;
   wire              m_valid;
   wire [31:0]       m_frame;
 
-  pfb_tune #(.NU(NU), .COEF_FILE("../rtl/gen/tune_fir.mem"),
+  pfb_tune #(.NU(NU), .DEC(DEC),
+             .COEF_FILE(COEF),
              .ROM_FILE("../rtl/gen/sincos_qw.mem")) dut (
     .clk(clk), .in_re(re), .in_im(im), .in_k(k), .in_valid(valid),
     .cfg_we(cfg_we), .cfg_idx(cfg_idx), .cfg_data(cfg_data),
@@ -67,8 +80,13 @@ module tb_tune;
   endfunction
 
   initial begin
-    fin  = $fopen("out/tune_in.txt", "w");
-    fout = $fopen("out/tune_out.txt", "w");
+    if (DEC == 4) begin
+      fin  = $fopen("out/tune_in_d4.txt", "w");
+      fout = $fopen("out/tune_out_d4.txt", "w");
+    end else begin
+      fin  = $fopen("out/tune_in.txt", "w");
+      fout = $fopen("out/tune_out.txt", "w");
+    end
     repeat (4) @(posedge clk);
     for (u = 0; u < NU; u = u + 1) begin
       cfg(2 * u, inc[u][31:0]);
@@ -81,10 +99,10 @@ module tb_tune;
       if (n == 6) run <= 1;
       for (j = 0; j < 2048; j = j + 1) begin
         @(posedge clk) begin
-          // a restart: the pass of frame 154 is emitting from its frame
-          // end + ~40 clocks for 3840 clocks
-          if (n == 155 && j == 1000) run <= 0;
-          if (n == 155 && j == 1003) run <= 1;
+          // a restart: the pass of frame RS - 1 is emitting from its
+          // frame end + ~40 clocks for 3840 clocks
+          if (n == RS && j == 1000) run <= 0;
+          if (n == RS && j == 1003) run <= 1;
           valid <= 1;
           k     <= j;
           re    <= val(j, n, 0);

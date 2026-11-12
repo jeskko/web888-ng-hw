@@ -9,12 +9,17 @@
 // The bins tuner (tb_tune: bit-exact) through its registers: two users
 // through the EV window, its ring on HP2 through the stock RX registers,
 // the tone's user far above the empty one, irq 2.
+// VHF = 1 (with TCOEF the ÷4 table): the PFB_VHF build at 98.304 MHz,
+// 24 kHz bins (the tone at 2.4 MHz, bin 100 still), the tuner decimating
+// by 4, the signature's clock plan 1.
 
 module tb_core_pfb;
 
-  localparam real FS     = 122.88e6;
+  parameter integer VHF   = 0;
+  parameter         TCOEF = "../rtl/gen/tune_fir.mem";
+  localparam real FS     = VHF ? 98.304e6 : 122.88e6;
   localparam real TCLK   = 1.0e9 / FS;
-  localparam real F1     = 3.0e6;        // bin 100, -12 dBFS
+  localparam real F1     = FS * 100.0 / 4096.0;  // bin 100, -12 dBFS
   localparam integer PPS_PERIOD = 100000;
 
   // ---------------------------------------------------------------- clocks
@@ -88,7 +93,7 @@ module tb_core_pfb;
     .m_axi_``p``_rvalid(1'b0), .m_axi_``p``_rready(p``_rready)
 
   web888_core #(.ROM_FILE("../rtl/gen/sincos_qw.mem"), .BUILD_ID(32'h2026_1029),
-                .PFB(1), .TUNE_COEF_FILE("../rtl/gen/tune_fir.mem"),
+                .PFB(1), .PFB_VHF(VHF), .TUNE_COEF_FILE(TCOEF),
                 .PFB_COEF_PREFIX("../rtl/gen/pfb_coef_"),
                 .PFB_TW_PREFIX("../rtl/gen/pfb_tw_"),
                 .PFB_SPLIT_FILE("../rtl/gen/pfb_split_tw.mem"),
@@ -180,7 +185,7 @@ module tb_core_pfb;
   task tune(input integer u, input real hz, input en);
     reg [47:0] inc;
     begin
-      inc = hz / 122.88e6 * 281474976710656.0;
+      inc = hz / FS * 281474976710656.0;
       gp_write(EV + 4 * (64 + 2 * u), inc[31:0], 4'hf);
       gp_write(EV + 4 * (65 + 2 * u), {en, 15'd0, inc[47:32]}, 4'hf);
     end
@@ -237,7 +242,7 @@ module tb_core_pfb;
     while (dut.rst) @(posedge clk_out);
     repeat (10) @(posedge clk_out);
 
-    r32(STS + 32'h00, d); check("signature (32 tuner users)", d, 32'h0E5D2010);
+    r32(STS + 32'h00, d); check("signature (32 tuner users)", d, VHF ? 32'h0E5D2110 : 32'h0E5D2010);
     r32(STS + 32'h18, d); check("build id", d, 32'h20261029);
     r32(EV, d);           check("ev window reads 0", d, 0);
 
@@ -252,8 +257,8 @@ module tb_core_pfb;
 
     // the tuner: user 0 1 kHz below the tone, user 1 where there is none;
     // its ring (the stock RX registers) at TN_BASE, 256 bursts
-    tune(0, 2.999e6, 1);
-    tune(1, 5.0e6, 1);
+    tune(0, F1 - 1.0e3, 1);
+    tune(1, FS * 5.0 / 122.88, 1);
     w32(32'h8c, TN_BASE);
     w16(32'h90, 16'd255);
     w16(32'h00, 16'h0001);

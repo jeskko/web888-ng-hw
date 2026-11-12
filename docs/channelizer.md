@@ -6,7 +6,9 @@ DMAs) and the bins tuner (§3.8) are bit-exact to the model in
 simulation; timing is met with the guardband. It has run on the
 project's unit since 2026-10-29: web888d in bins mode, 32 tuner channels
 and FT8 skimmers on ten bands. v0.4.0 (2026-11-11) adds the zoom
-engine (§3.9). Progress notes: §5. This is the core of
+engine (§3.9). A VHF build (`websdr_pfb_vhf.bit`, §3.10: 98.304 to
+147.456 MHz by undersampling) is on `main`, simulated, not yet released
+or run on a board. Progress notes: §5. This is the core of
 the open-FPGA milestone (server design §11, M6).
 It drops compatibility with the stock server's FPGA interface. The
 stock bitstream stays usable as a fallback with its own backend.
@@ -694,6 +696,56 @@ both to be measured (step 2 below) before the RTL is written.
   no margin bins or held spectra; the server's settle logic can go for
   job-fed views.
 
+### 3.10 VHF by undersampling (2026-11-12: simulated, CI build pending)
+
+The board's VHF input (the RF switch, `MODE_SET`) feeds the same ADC.
+The stock firmware's airband mode clocks the ADC at 98.304 or 110.592
+MHz and tunes the third Nyquist zone (fs..1.5 fs, upright): the band
+lands at 0..fs/2 as HF does. The channelizer doesn't care what band its
+input came from, so the same datapath serves VHF; only the rates move
+with the clock.
+
+| ADC clock | zone 2 (RF) | bins | frames | tuner to 12 kS/s |
+|---|---|---|---|---|
+| 122.88 MHz (HF) | (122.88..184.32, no filter for it) | 30 kHz | 60 kS/s | ÷5 |
+| **98.304 MHz** | **98.304..147.456 MHz** | **24 kHz** | **48 kS/s** | **÷4** |
+| 110.592 MHz | 110.592..165.888 MHz | 27 kHz | 54 kS/s | ÷4.5: no |
+
+* **98.304 MHz** (the stock airband profile 0): airband 118-137 MHz and
+  2 m 144-146 MHz inside, and every rate a whole multiple of 12 kS/s.
+  The frames at 48 kS/s are 4 × 12 k (web888d's audio chain and HPSDR's
+  48 kS/s need that); 110.592 MHz's 54 kS/s aren't. At 122.88 MHz the
+  airband would straddle fs (118-122.88 MHz folds onto 122.88-127.76
+  MHz).
+* **Everything scales with the clock**: a bin is flat to ±16.8 kHz and
+  rejects beyond ±31.2 kHz (±21 / ±39 at HF), so a channel up to ±4.8
+  kHz wide within ±12 kHz of a bin's centre is clean. The zoom engine,
+  the power line and the bin mask count frames and bins, not Hz.
+* **The tuner** decimates by 4 (`pfb_tune` `DEC`), its FIR designed for
+  48 kS/s with the same edges (pass 4.8 kHz, stop 7.2 kHz; 120 taps:
+  0.0005 dB ripple, 87 dB stopband, against 0.003 / 74 dB at ÷5). A pass
+  takes 3840 of the 8192 clocks between outputs. Frequency words, bins
+  and offsets are in units of fs, so its tuning is unchanged.
+* **The build**: `make pfb_vhf` (`web888_core` `PFB_VHF = 1`, the VHF
+  PLL setup, constrained as the vhf build at 9.0 ns with 0.5 ns guard
+  for 110.592 MHz: 8.5 ns against 98.304 MHz's 10.17). The signature's
+  [11:8] (no WF channels in this build) is the clock plan: 0 HF, 1 VHF,
+  so web888d knows the tuner's rate and refuses a bitstream that doesn't
+  match the clock (signature `0x0E5D2110`). The driver needs no change.
+* **Simulated**: `make sim-tune` runs the tuner at ÷5 and ÷4, both
+  bit-exact to `scripts/tune_model.py`; `make sim-core-pfb` runs the
+  whole build both ways through its registers (at 98.304 MHz: the
+  −12 dBFS tone in bin 100 at 2.4 MHz, its tuner user at 2^29 ·
+  10^(−12/20)).
+* **Server** (web888-ng `crates/zynqsdr`): `[radio] band = "vhf"`
+  programs the Si5351 to 98.304 MHz before loading, sets the RF switch,
+  and maps RF to baseband (RF = fs + baseband) for the tuner's words,
+  the bins (`first_hz` = fs) and the tunable range; NBFM for 2 m.
+* **Not known yet**: the VHF input's filter (what else folds in: FM
+  broadcast 88-98.3 MHz would land mirrored on 98.3-108.6 MHz), its
+  gain, and the noise floor there. The stock firmware's airband mode
+  works on the same hardware, so the path itself is used.
+
 ## 4. Server side
 
 * New backend next to the stock-driver one: the `Radio` trait gains (or
@@ -805,8 +857,8 @@ both to be measured (step 2 below) before the RTL is written.
 * Exact T, and whether the history fits in BRAM (§3).
 * Bin count: 4096 branches (30 kHz bins) against 2048 (60 kHz bins: half
   the FFT, but the CPU decimates 120 → 12 kS/s per user).
-* Do the VHF airband modes (98.304 / 110.592 MHz clocks, undersampling)
-  carry over? They should: the bank sees whatever is in the Nyquist zone.
+* ~~Do the VHF airband modes carry over?~~ Yes, at 98.304 MHz (§3.10);
+  110.592 MHz's 54 kS/s frames don't divide into 12 kS/s.
 * GPS timestamps per frame (sample counter at each frame) for TDoA-grade
   I/Q: cheap, and planned with M6 anyway.
 * Wideband streaming (§3.5): in the channelizer bitstream or its own
