@@ -15,6 +15,10 @@
 #   2. static network from web888.txt; the log is rewritten only because
 #      it changed
 #   3. slot A without a kernel: U-Boot uses up its tries, slot B boots
+#   4. safe mode (images from web888-ng-os v0.9.3): asked for in
+#      web888.txt, then by the boot loader with no tries left in either
+#      slot (web888d without the radio, the SDR driver not loaded, the
+#      fixed address 169.254.88.8), and out of it with web888-safe leave
 #
 # Each root slot gets the emulator's DT changes (scripts/emu-dtb.sh). The
 # checks log in over SSH with a key made here. Ports: SSH 22322, web 28173.
@@ -176,7 +180,55 @@ check "slot A failed until out of tries" grep -q 'web888: slot A did not boot' <
 check "slot B chosen" grep -q 'web888: slot B' <<< "$log"
 wait_ssh || bad "no SSH on slot B"
 check "root slot B" on 'grep -q rauc.slot=B /proc/cmdline'
+# safe mode came with web888-ng-os v0.9.3
+if on 'test -x /usr/sbin/web888-safe'; then safe_mode=1; else safe_mode=0; fi
 power_off
+
+if [ $safe_mode = 1 ]; then
+	echo "== 4. safe mode"
+	# asked for in web888.txt
+	txt "hostname = emu888" "admin_password = (set)" "ssh_key = $(cat "$W/key.pub")" "safe = yes"
+	boot 'login:' 1500 || bad "no login prompt"
+	wait_ssh || bad "no SSH in safe mode"
+	check "safe mode from web888.txt" on 'grep -q "safe = yes in web888.txt" /run/web888/safe'
+	on 'for i in $(seq 30); do systemctl is-active -q web888d-safe && break; sleep 2; done'
+	check "web888d runs without the radio" on 'systemctl is-active -q web888d-safe && ! systemctl is-active -q web888d'
+	check "web888d says so" on 'wget -qO- http://127.0.0.1:8073/api/safe | grep -q "\"safe\":true"'
+	check "the fixed address" on 'ip -4 addr show dev eth0 | grep -q "inet 169.254.88.8/16"'
+	check "slot not marked good" on '! systemctl is-active -q web888-boot-ok && test "$(fw_printenv -n BOOT_B_LEFT)" != 3'
+	check "web888-safe refuses while web888.txt asks" on '! web888-safe leave --no-reboot'
+	# the boot loader's: no slot with tries left (A has none since 3.)
+	on 'fw_setenv BOOT_B_LEFT 0'
+	power_off
+	fat web888-setup.log > "$W/setup4.log"
+	check "log says safe mode" grep -q 'SAFE MODE: safe = yes' "$W/setup4.log"
+	txt "hostname = emu888" "admin_password = (set)" "ssh_key = $(cat "$W/key.pub")"
+	boot 'login:' 1500 || bad "no login prompt"
+	log=$("$VM" log)
+	check "boot loader: safe mode" grep -q 'web888: no slot has tries left: safe mode' <<< "$log"
+	wait_ssh || bad "no SSH in the boot loader's safe mode"
+	check "safe mode on the command line" on 'grep -q "web888.safe=1" /proc/cmdline'
+	check "the slot that boots (B; A has no kernel)" on 'grep -q rauc.slot=B /proc/cmdline'
+	check "the reason" on 'grep -q "no root slot has tries left" /run/web888/safe'
+	check "SDR driver not loaded" on '! grep -q "^web888_sdr " /proc/modules'
+	on 'for i in $(seq 30); do systemctl is-active -q web888d-safe && break; sleep 2; done'
+	check "web888d runs without the radio" on 'systemctl is-active -q web888d-safe'
+	check "the fixed address" on 'ip -4 addr show dev eth0 | grep -q "inet 169.254.88.8/16"'
+	check "tries stay at 0" on 'test "$(fw_printenv -n BOOT_A_LEFT)$(fw_printenv -n BOOT_B_LEFT)" = 00'
+	# leaving: the tries come back, the normal system boots (A fails
+	# three times first: it still has no kernel)
+	mark=$("$VM" log | wc -l)
+	on 'web888-safe leave' || true
+	for ((i = 0; i < 3000; i++)); do
+		"$VM" log | tail -n +$((mark + 1)) | grep -Eq 'login:' && break
+		sleep 0.5
+	done
+	wait_ssh || bad "no SSH after leaving safe mode"
+	check "out of safe mode" on '! test -e /run/web888/safe && ! grep -q web888.safe /proc/cmdline'
+	on 'for i in $(seq 45); do systemctl is-active -q web888d && break; sleep 2; done'
+	check "web888d with the radio again" on 'systemctl is-active -q web888d && ! systemctl is-active -q web888d-safe'
+	power_off
+fi
 
 echo
 if [ $fails = 0 ]; then
