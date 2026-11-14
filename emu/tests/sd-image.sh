@@ -23,10 +23,17 @@
 # Each root slot gets the emulator's DT changes (scripts/emu-dtb.sh). The
 # checks log in over SSH with a key made here. Ports: SSH 22322, web 28173.
 # web888.txt without a bitstream line: the channelizer (the default since
-# web888-ng-os v0.7.0), web888d gets websdr_pfb.bit; CHANNELIZER=1 sets
-# the line too; STANDARD=1 sets bitstream = standard (web888d's own
-# choice). The emulated PL is the standard one whatever is loaded, so
-# bins mode isn't tested.
+# web888-ng-os v0.7.0), web888d loads websdr_pfb.bit; CHANNELIZER=1 sets
+# the line too; STANDARD=1 sets bitstream = standard. From os v0.10.0
+# only a line in web888.txt goes on web888d's command line (else web888d's
+# configuration, default auto: the channelizer). The emulated PL is the
+# standard one whatever is loaded, so bins mode isn't tested.
+#
+# The boot loader update (os v0.10.0, web888-bootloader): the FAT's
+# u-boot.img gets trailing bytes before the first boot (U-Boot's SPL reads
+# only the image's length), so it differs from the slot's; once slot A is
+# good, web888-bootloader writes the slot's copy, keeps u-boot.img.old,
+# and the next boot (2.) starts with it.
 set -euo pipefail
 EMU=$(cd "$(dirname "$0")/.." && pwd)
 [ $# -ge 1 ] || { sed -n '4,25p' "$0" >&2; exit 2; }
@@ -114,6 +121,10 @@ txt() { # web888.txt from lines
 fat() { mcopy -i "$FAT" "::$1" - 2> /dev/null | tr -d '\r'; }
 
 echo "== 1. first boot"
+# the boot loader update's: u-boot.img changed, still booting
+mcopy -i "$FAT" ::u-boot.img "$W/u-boot.img"
+head -c 64 /dev/zero >> "$W/u-boot.img"
+mcopy -o -i "$FAT" "$W/u-boot.img" ::u-boot.img
 bitline=
 [ "${CHANNELIZER:-0}" = 1 ] && bitline="bitstream = channelizer"
 [ "${STANDARD:-0}" = 1 ] && bitline="bitstream = standard"
@@ -137,10 +148,16 @@ check "eth0 (not renamed)" on 'test -e /sys/class/net/eth0'
 check "web888-setup ran" on 'systemctl is-active web888-setup'
 check "hostname from web888.txt" on 'test "$(hostname)" = emu888'
 check "web888d running" on 'systemctl is-active web888d'
+# web888d's log names the file it loaded
+on 'for i in $(seq 30); do journalctl -b -u web888d | grep -q "bitstream: /" && break; sleep 2; done'
 if [ "${STANDARD:-0}" != 1 ]; then
-	check "web888d loads the channelizer" on 'tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q "bitstream /usr/share/web888/websdr_pfb.bit"'
+	check "web888d loads the channelizer" on 'journalctl -b -u web888d | grep -q "bitstream: /usr/share/web888/websdr_pfb.bit"'
 else
-	check "web888d's own bitstream choice" on '! tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q websdr_pfb'
+	check "web888d loads the standard bitstream" on 'journalctl -b -u web888d | grep -q "bitstream: /usr/share/web888/websdr_hf.bit"'
+fi
+if [ -z "$bitline" ] && on 'test -x /usr/sbin/web888-bootloader'; then
+	# os v0.10.0: no bitstream line, nothing on the command line
+	check "no bitstream on web888d's command line" on '! tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q -- --bitstream'
 fi
 check "admin hash in /config" on 'grep -q admin_hash /config/web888d.toml'
 check "tunnel clients installed" on 'test -x /usr/bin/frpc -a -x /usr/bin/cloudflared -a -x /usr/bin/rathole -a -x /usr/bin/chisel'
@@ -149,7 +166,22 @@ check "/boot read-only again" on 'grep -q " /boot vfat ro," /proc/mounts'
 check "web UI answers" curl -sk --max-time 20 "https://127.0.0.1:$WEB_PORT/"
 on 'sleep 75; systemctl status web888-boot-ok --no-pager' > "$W/boot-ok.txt" 2>&1 || true
 check "slot A marked good (tries 3)" on 'test "$(fw_printenv -n BOOT_A_LEFT)" = 3'
+if on 'test -x /usr/sbin/web888-bootloader'; then
+	bootloader=1
+	check "boot loader: an update" on 'web888-bootloader | grep -q "^state=update$"'
+	check "boot loader: nothing blocks it" on '! web888-bootloader | grep -q "^blocked="'
+	check "boot loader: written" on 'web888-bootloader install'
+	check "boot loader: now current" on 'web888-bootloader | grep -q "^state=current$"'
+	check "/boot read-only again" on 'grep -q " /boot vfat ro," /proc/mounts'
+else
+	bootloader=0
+fi
 power_off
+if [ $bootloader = 1 ]; then
+	mcopy -i "$FAT" ::u-boot.img.old "$W/u-boot.img.old" 2> /dev/null || true
+	check "boot loader: the old u-boot.img kept" cmp -s "$W/u-boot.img" "$W/u-boot.img.old"
+	check "boot loader: boot.bin unchanged, no boot.bin.old" test -z "$(fat boot.bin.old)"
+fi
 check "password line reads (set)" grep -q '^admin_password = (set)$' < <(fat web888.txt)
 check "no made-up password file" test -z "$(fat web888-password.txt)"
 fat web888-setup.log > "$W/setup1.log"
@@ -161,6 +193,7 @@ txt "hostname = emu888" "admin_password = (set)" "network = static" \
 	"address = 10.0.2.15/24" "gateway = 10.0.2.2" "dns = 10.0.2.3" \
 	"ssh_key = $(cat "$W/key.pub")"
 boot 'login:' 900 || bad "no login prompt"
+[ $bootloader = 1 ] && check "boot loader: the written one boots" grep -q 'web888: slot A' <<< "$("$VM" log)"
 wait_ssh || bad "no SSH on the static address"
 check "static address" on 'grep -q "^Address=10.0.2.15/24" /run/systemd/network/10-web888.network'
 check "no DHCP" on '! grep -q "^DHCP" /run/systemd/network/10-web888.network'

@@ -226,7 +226,11 @@ phase, with fixed gain so the AGCs don't differ:
   an inaudible all-pass phase.
 * AM's envelope detection mixes the 3–5 kHz sidebands, where the two
   chains' filters differ slightly. The residual is audibly nothing, but
-  worth a look when the audio filters are tuned.
+  worth a look when the audio filters are tuned. **Accepted for v1.0**
+  (decided 2026-11-14, the v1.0 checklist's item 11): −26 to −29 dB of
+  a difference between two correct chains, not an error against the
+  signal; SSB and CW agree to the WAV's limit. Revisit with the audio
+  filters (v1.x).
 * With AGC the levels agree within 0.2 dB and the spectra within
   ±0.3 dB per 500 Hz.
 
