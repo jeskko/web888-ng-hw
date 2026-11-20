@@ -15,6 +15,7 @@
 #   2. static network from web888.txt; the log is rewritten only because
 #      it changed
 #   3. slot A without a kernel: U-Boot uses up its tries, slot B boots
+#      (from os v0.14.0: chronyd running, no timesyncd, its socket)
 #   4. safe mode (images from web888-ng-os v0.9.3): asked for in
 #      web888.txt, then by the boot loader with no tries left in either
 #      slot (web888d without the radio, the SDR driver not loaded, the
@@ -158,6 +159,14 @@ fi
 if [ -z "$bitline" ] && on 'test -x /usr/sbin/web888-bootloader'; then
 	# os v0.10.0: no bitstream line, nothing on the command line
 	check "no bitstream on web888d's command line" on '! tr "\0" " " < /proc/$(pidof web888d)/cmdline | grep -q -- --bitstream'
+fi
+# time sync: chrony instead of systemd-timesyncd (os v0.14.0; the
+# emulator has no NTP server to reach, so only the daemon and its socket)
+if on 'test -e /usr/lib/systemd/system/chronyd.service' > /dev/null 2>&1; then
+	check "chronyd running" on 'systemctl is-active chronyd'
+	check "no systemd-timesyncd" on '! test -e /usr/lib/systemd/systemd-timesyncd'
+	check "chrony's socket for web888d's time sources" on 'test -S /run/chrony.web888.sock'
+	check "chrony's drift directory on /config" on 'test -d /config/chrony'
 fi
 check "admin hash in /config" on 'grep -q admin_hash /config/web888d.toml'
 check "tunnel clients installed" on 'test -x /usr/bin/frpc -a -x /usr/bin/cloudflared -a -x /usr/bin/rathole -a -x /usr/bin/chisel'
