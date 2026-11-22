@@ -179,6 +179,9 @@ if on 'test -e /usr/lib/systemd/system/chronyd.service' > /dev/null 2>&1; then
 		check "NTP for the LAN: on" api -f -o /dev/null -d '{"enabled":true}' "https://127.0.0.1:$WEB_PORT/api/admin/clock/serve"
 		check "chrony answers on UDP 123" on 'for i in 1 2 3 4 5 6 7 8 9 10; do grep -q ":007B " /proc/net/udp /proc/net/udp6 && exit 0; sleep 1; done; exit 1'
 		check "the Clock tab shows it applied" grep -q '"applied":true' < <(api "https://127.0.0.1:$WEB_PORT/api/admin/clock")
+		# an NTP request from the guest's own LAN address (chronyd -Q asks
+		# and sets nothing); answered, not dropped
+		check "chrony answers an NTP request from the LAN" on 'a=$(ip -4 -o addr show eth0 | sed -n "s/.* inet \([0-9.]*\).*/\1/p" | sed -n 1p); chronyd -Q -f /dev/null -t 15 "pidfile /tmp/q.pid" "server $a iburst maxsamples 3" 2>&1 | grep -q "System clock wrong by"'
 		check "NTP for the LAN: off" api -f -o /dev/null -d '{"enabled":false}' "https://127.0.0.1:$WEB_PORT/api/admin/clock/serve"
 		check "chrony serves no one again" on 'for i in 1 2 3 4 5 6 7 8 9 10; do grep -q ":007B " /proc/net/udp /proc/net/udp6 || exit 0; sleep 1; done; exit 1'
 	fi
