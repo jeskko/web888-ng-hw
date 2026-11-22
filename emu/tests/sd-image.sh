@@ -15,7 +15,8 @@
 #   2. static network from web888.txt; the log is rewritten only because
 #      it changed
 #   3. slot A without a kernel: U-Boot uses up its tries, slot B boots
-#      (from os v0.14.0: chronyd running, no timesyncd, its socket)
+#      (from os v0.14.0: chronyd running, no timesyncd, its socket; after
+#      v0.14.0: the Clock tab's NTP for the LAN opens and closes UDP 123)
 #   4. safe mode (images from web888-ng-os v0.9.3): asked for in
 #      web888.txt, then by the boot loader with no tries left in either
 #      slot (web888d without the radio, the SDR driver not loaded, the
@@ -167,6 +168,20 @@ if on 'test -e /usr/lib/systemd/system/chronyd.service' > /dev/null 2>&1; then
 	check "no systemd-timesyncd" on '! test -e /usr/lib/systemd/systemd-timesyncd'
 	check "chrony's socket for web888d's time sources" on 'test -S /run/chrony.web888.sock'
 	check "chrony's drift directory on /config" on 'test -d /config/chrony'
+	# NTP for the LAN (web888d's [timesync] serve_lan, the Clock tab's
+	# switch; os after v0.14.0): chrony serves no one until the admin turns
+	# it on, then answers on UDP 123, rate-limited, and stops when it's off
+	if on 'grep -q "^ratelimit" /etc/chrony.conf' > /dev/null 2>&1; then
+		jar="$W/cookies.txt"
+		api() { curl -sk --max-time 20 -b "$jar" -c "$jar" -H 'Content-Type: application/json' "$@"; }
+		api -o /dev/null -d '{"password":"test-password-1","admin":true}' "https://127.0.0.1:$WEB_PORT/api/login"
+		check "chrony serves no one by default" on '! grep -q ":007B " /proc/net/udp /proc/net/udp6'
+		check "NTP for the LAN: on" api -f -o /dev/null -d '{"enabled":true}' "https://127.0.0.1:$WEB_PORT/api/admin/clock/serve"
+		check "chrony answers on UDP 123" on 'for i in 1 2 3 4 5 6 7 8 9 10; do grep -q ":007B " /proc/net/udp /proc/net/udp6 && exit 0; sleep 1; done; exit 1'
+		check "the Clock tab shows it applied" grep -q '"applied":true' < <(api "https://127.0.0.1:$WEB_PORT/api/admin/clock")
+		check "NTP for the LAN: off" api -f -o /dev/null -d '{"enabled":false}' "https://127.0.0.1:$WEB_PORT/api/admin/clock/serve"
+		check "chrony serves no one again" on 'for i in 1 2 3 4 5 6 7 8 9 10; do grep -q ":007B " /proc/net/udp /proc/net/udp6 || exit 0; sleep 1; done; exit 1'
+	fi
 fi
 check "admin hash in /config" on 'grep -q admin_hash /config/web888d.toml'
 check "tunnel clients installed" on 'test -x /usr/bin/frpc -a -x /usr/bin/cloudflared -a -x /usr/bin/rathole -a -x /usr/bin/chisel'
